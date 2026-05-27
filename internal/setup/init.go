@@ -132,7 +132,13 @@ func step4Config(bd string, repair bool) (*config.Config, error) {
 		SSHPort: 2222,
 		QMPPort: 4444,
 	}
-	cfg.LLMProvider = ask("LLM Provider (e.g. anthropic, openai)")
+	cfg.LLMProvider = ask("LLM Provider (anthropic, openai, ollama, gemini)")
+	defaultURL := config.DefaultBaseURL(cfg.LLMProvider)
+	cfg.LLMBaseURL = ask(fmt.Sprintf("LLM Base URL (Enter for default: %s)", defaultURL))
+	if cfg.LLMBaseURL == "" {
+		cfg.LLMBaseURL = defaultURL
+	}
+	cfg.LLMModel = ask("LLM Model (e.g. claude-opus-4-5, gpt-4o, llama3)")
 	cfg.APIKey = ask("API Key")
 	cfg.GitHubToken = ask("GitHub Token")
 	cfg.TelegramToken = ask("Telegram Token (optional, Enter to skip)")

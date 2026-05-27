@@ -9,6 +9,8 @@ import (
 
 type Config struct {
 	LLMProvider   string `toml:"llm_provider"`
+	LLMBaseURL    string `toml:"llm_base_url"`
+	LLMModel      string `toml:"llm_model"`
 	APIKey        string `toml:"api_key"`
 	GitHubToken   string `toml:"github_token"`
 	TelegramToken string `toml:"telegram_token"`
@@ -16,6 +18,18 @@ type Config struct {
 	VMPath        string `toml:"vm_path"`
 	SSHPort       int    `toml:"ssh_port"`
 	QMPPort       int    `toml:"qmp_port"`
+}
+
+var providerBaseURLs = map[string]string{
+	"anthropic": "https://api.anthropic.com",
+	"openai":    "https://api.openai.com",
+	"ollama":    "http://localhost:11434",
+	"gemini":    "https://generativelanguage.googleapis.com",
+}
+
+// DefaultBaseURL returns the default API base URL for a given LLM provider name.
+func DefaultBaseURL(provider string) string {
+	return providerBaseURLs[provider]
 }
 
 func BaseDir() (string, error) {
