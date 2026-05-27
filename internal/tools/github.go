@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	gogithub "github.com/google/go-github/v60/github"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/user/golovebox/internal/sandbox"
@@ -28,7 +29,7 @@ func GetIssue(ctx context.Context, token, owner, repo string, number int) (*gogi
 // CloneRepo clones a GitHub repository into the VM via SSH.
 // Uses GIT_ASKPASS so the token never appears in git log or ps output.
 func CloneRepo(sshClient *ssh.Client, token, owner, repo, destPath string) error {
-	askpassPath := "/tmp/.golovebox_askpass.sh"
+	askpassPath := fmt.Sprintf("/tmp/.golovebox_askpass_%s.sh", uuid.New().String())
 	// Single-quote the token; replace any embedded single-quotes with '\''.
 	safeToken := strings.ReplaceAll(token, "'", "'\\''")
 	script := fmt.Sprintf("#!/bin/sh\necho '%s'\n", safeToken)

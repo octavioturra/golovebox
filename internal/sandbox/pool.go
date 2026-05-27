@@ -30,17 +30,28 @@ func NewPool(cfg PoolConfig) *Pool {
 }
 
 // Acquire returns an idle connection from the pool, or dials a new one.
+// Idle connections are validated with a keepalive before being returned;
+// stale connections are discarded and the next one is tried.
 // Respects ctx cancellation — returns ctx.Err() if the context is done before a
 // new connection is established.
 func (p *Pool) Acquire(ctx context.Context) (*ssh.Client, error) {
-	p.mu.Lock()
-	if len(p.idle) > 0 {
+	for {
+		p.mu.Lock()
+		if len(p.idle) == 0 {
+			p.mu.Unlock()
+			break
+		}
 		c := p.idle[len(p.idle)-1]
 		p.idle = p.idle[:len(p.idle)-1]
 		p.mu.Unlock()
-		return c, nil
+
+		_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
+		if err == nil {
+			return c, nil
+		}
+		_ = c.Close()
+		// stale connection discarded — try next idle or dial fresh
 	}
-	p.mu.Unlock()
 
 	select {
 	case <-ctx.Done():

@@ -66,6 +66,8 @@ func step1Dirs(bd string, repair bool) error {
 		filepath.Join(bd, "vm"),
 		filepath.Join(bd, "memory"),
 		filepath.Join(bd, "logs"),
+		filepath.Join(bd, "runs"),
+		filepath.Join(bd, "skills"),
 	}
 	for _, d := range dirs {
 		if repair {

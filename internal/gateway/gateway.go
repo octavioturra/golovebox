@@ -131,6 +131,22 @@ func (g *Gateway) RunTask(ctx context.Context, owner, repo string, issueNum int,
 	return loop.Run(ctx, task, progress)
 }
 
+// RunSpecTask runs the agent loop for an arbitrary task string.
+// This is the general-purpose counterpart to RunTask (which is issue-specific).
+// Pass nil for progress to run silently.
+func (g *Gateway) RunSpecTask(ctx context.Context, task string, progress agent.ProgressFunc) (string, error) {
+	var mem *memory.Memory
+	if memDir, err := g.cfg.MemoryDir(); err == nil {
+		embFn := memory.NewEmbedFnFromConfig(g.cfg.LLMProvider, g.cfg.LLMBaseURL, g.cfg.APIKey)
+		if m, newErr := memory.New(memDir, embFn); newErr == nil {
+			mem = m
+		}
+	}
+	registry := g.buildRegistry("", "", mem)
+	loop := agent.New(g.llm, registry, mem)
+	return loop.Run(ctx, task, progress)
+}
+
 // buildRegistry creates the agent tool registry for a specific owner/repo.
 // Each tool closure acquires its own SSH connection from the pool.
 func (g *Gateway) buildRegistry(owner, repo string, mem *memory.Memory) *agent.Registry {
