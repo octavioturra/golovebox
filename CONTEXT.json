@@ -1,0 +1,183 @@
+{
+  "project": "golovebox",
+  "tagline": "Portable autonomous coding + comms agent. Single .exe, zero install.",
+  "status": "phase-1 complete — scaffold compiled, golovebox.exe 18MB",
+
+  "philosophy": {
+    "portable_app": true,
+    "base_dir": "filepath.Join(filepath.Dir(os.Executable()), \".golovebox\")",
+    "no_writes_outside_base_dir": true,
+    "no_admin_required": true,
+    "no_cgo": true,
+    "build_command": "GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build"
+  },
+
+  "platform": {
+    "primary": "Windows x86_64",
+    "v1_targets": ["Linux x86_64", "macOS arm64"]
+  },
+
+  "stack": {
+    "cli": "spf13/cobra",
+    "config": "BurntSushi/toml",
+    "llm": "anthropics/anthropic-sdk-go — OpenAI-compatible wrapper, supports Claude/GPT/Gemini/Ollama via configurable BaseURL",
+    "telegram": "go-telegram-bot-api/telegram-bot-api/v5 — pure Go, importable",
+    "slack": "slack-go/slack — pure Go",
+    "email": "emersion/go-imap — pure Go IMAP",
+    "ssh_sftp": "golang.org/x/crypto/ssh",
+    "qemu_control": "digitalocean/go-qemu (QMP, pure Go)",
+    "memory": "philippgille/chromem-go (pure Go, zero CGO)",
+    "github": "google/go-github/v60",
+    "browser": "go-rod/rod (headless Chromium, auto-download)"
+  },
+
+  "stack_decisions": {
+    "why_not_goclaw": "application framework — all packages are internal/, not importable as library",
+    "llm_client": "thin HTTP wrapper over /v1/messages — OpenAI-compatible format, no provider lock-in; BaseURL swappable per config",
+    "gateway_channels_v0": ["Telegram", "CLI"],
+    "gateway_channels_v1": ["Slack", "Email IMAP", "WhatsApp"]
+  },
+
+  "sandbox": {
+    "technology": "QEMU",
+    "reason": "only cross-platform VM — Linux/Mac/Windows",
+    "install": "downloaded on first boot via golovebox init, not embedded",
+    "install_location": ".golovebox/qemu/",
+    "vm_image": "Alpine Linux minimal with dev toolchain",
+    "vm_location": ".golovebox/vm/base.img",
+    "host_vm_exec": "SSH localhost:2222",
+    "host_vm_files": "SFTP over same SSH connection",
+    "host_vm_control": "QMP TCP localhost:4444",
+    "why_not_virtio_fs": "poor Windows host support",
+    "why_not_gvisor": "Linux only",
+    "why_not_firecracker": "Linux only",
+    "why_not_wasmedge": "WASM only — cant run arbitrary code like git, gcc, npm",
+    "why_not_hyper_v": "bureaucratic, anemic, not portable"
+  },
+
+  "first_boot": {
+    "trigger": "auto if .golovebox/ does not exist",
+    "command": "golovebox init",
+    "repair_command": "golovebox init --repair",
+    "steps": [
+      "create .golovebox/ next to .exe",
+      "download QEMU installer (official signed binary)",
+      "install QEMU to .golovebox/qemu/",
+      "download Alpine base.img.zst (~300MB)",
+      "extract VM image to .golovebox/vm/",
+      "interactive config: LLM provider, API keys, GitHub token, Telegram token",
+      "smoke test: boot VM, ssh echo ok, print ready"
+    ],
+    "requires_internet": true
+  },
+
+  "agent_loop": {
+    "pattern": "ReAct (Reasoning + Acting)",
+    "flow": "prompt → LLM → parse action → execute tool → observe → repeat",
+    "tools_v0": [
+      "shell (SSH exec in VM)",
+      "read_file (SFTP)",
+      "write_file (SFTP)",
+      "search_memory (chromem-go similarity search)",
+      "github_list_issues",
+      "github_get_issue",
+      "github_clone_repo",
+      "github_open_pr"
+    ],
+    "llm_interface": "OpenAI-compatible — Claude, GPT, Gemini, Ollama all supported via BaseURL config"
+  },
+
+  "project_structure": {
+    "cmd/golovebox/main.go": "entrypoint, cobra CLI",
+    "internal/agent/loop.go": "ReAct loop",
+    "internal/agent/planner.go": "task decomposition",
+    "internal/agent/tools.go": "tool registry",
+    "internal/llm/client.go": "OpenAI-compatible HTTP client, BaseURL swappable",
+    "internal/tools/shell.go": "SSH exec",
+    "internal/tools/files.go": "SFTP read/write",
+    "internal/tools/github.go": "issues + PR",
+    "internal/tools/browser.go": "go-rod headless",
+    "internal/tools/email.go": "IMAP",
+    "internal/tools/slack.go": "Slack API",
+    "internal/gateway/gateway.go": "router: Telegram + CLI → agent",
+    "internal/gateway/telegram.go": "go-telegram-bot-api handler",
+    "internal/gateway/slack.go": "slack-go handler",
+    "internal/gateway/email.go": "go-imap handler",
+    "internal/memory/memory.go": "chromem-go",
+    "internal/sandbox/qemu.go": "boot, healthcheck, shutdown",
+    "internal/sandbox/qmp.go": "QMP control",
+    "internal/sandbox/ssh.go": "SSH + SFTP pool",
+    "internal/setup/init.go": "first boot flow",
+    "internal/config/config.go": "portable paths"
+  },
+
+  "v0_phases": [
+    {
+      "phase": 1,
+      "name": "Portable Foundation",
+      "weeks": "1-2",
+      "status": "complete",
+      "goal": "portable .exe that installs QEMU, boots VM, runs shell",
+      "smoke_test": "golovebox init installs everything; golovebox run 'echo hello' executes in VM",
+      "build_result": "golovebox.exe 18MB, CGO_ENABLED=0 ✓"
+    },
+    {
+      "phase": 2,
+      "name": "Agent Loop",
+      "weeks": "3-4",
+      "status": "next",
+      "goal": "agent resolves simple GitHub issue",
+      "smoke_test": "golovebox github --repo owner/repo --issue 42 → PR opened"
+    },
+    {
+      "phase": 3,
+      "name": "Gateway",
+      "weeks": "5-6",
+      "status": "pending",
+      "goal": "receive commands via Telegram",
+      "smoke_test": "Telegram message → PR opened → link replied in Telegram"
+    },
+    {
+      "phase": 4,
+      "name": "Polish",
+      "weeks": "7",
+      "status": "pending",
+      "goal": "usable by real human on Windows",
+      "smoke_test": "README quickstart works end-to-end on fresh Windows machine"
+    }
+  ],
+
+  "v0_done_definition": "Copy golovebox.exe to any folder on any Windows drive, run golovebox init, then send a GitHub issue via Telegram, have it cloned in an isolated Alpine VM, implemented, tested, PR opened, and link replied in Telegram — without installing anything on the system beyond what init downloads into the folder.",
+
+  "out_of_scope_v0": [
+    "parallel multi-agent",
+    "VS Code Server",
+    "web UI",
+    "Linux and macOS tested",
+    "auto-update",
+    "binary signing"
+  ],
+
+  "risks": [
+    {
+      "risk": "QEMU installer may not support portable mode without admin",
+      "probability": "medium",
+      "mitigation": "test early; fallback: extract official .zip to .golovebox/qemu/"
+    },
+    {
+      "risk": "port 2222 already in use",
+      "probability": "medium",
+      "mitigation": "auto-detect free port"
+    },
+    {
+      "risk": "Windows Defender flags QEMU child process",
+      "probability": "low",
+      "mitigation": "official signed installer; document if occurs"
+    },
+    {
+      "risk": "accidental CGO via transitive dependency",
+      "probability": "medium",
+      "mitigation": "CI with CGO_ENABLED=0 that fails the build"
+    }
+  ]
+}
