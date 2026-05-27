@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	"golang.org/x/crypto/ssh"
-
 	"github.com/user/golovebox/internal/llm"
 	"github.com/user/golovebox/internal/memory"
 )
 
-const maxIterations = 20
+// MaxIterations is the maximum number of ReAct loop iterations before giving up.
+const MaxIterations = 20
 
 const systemPromptTemplate = `You are an autonomous coding agent. Solve the given task using the available tools.
 
@@ -32,29 +31,34 @@ Action: error
 Parameters:
   reason: <explanation>`
 
+// ProgressFunc is called after each tool execution to report loop progress.
+// Nil is accepted — callers that don't need progress updates pass nil.
+type ProgressFunc func(iteration int, action, observation string)
+
 type Loop struct {
 	llm      *llm.Client
 	registry *Registry
 	memory   *memory.Memory
-	ssh      *ssh.Client
 }
 
-func New(llmClient *llm.Client, registry *Registry, mem *memory.Memory, sshClient *ssh.Client) *Loop {
+func New(llmClient *llm.Client, registry *Registry, mem *memory.Memory) *Loop {
 	return &Loop{
 		llm:      llmClient,
 		registry: registry,
 		memory:   mem,
-		ssh:      sshClient,
 	}
 }
 
-func (l *Loop) Run(ctx context.Context, task string) (string, error) {
+// Run executes the ReAct loop for the given task.
+// progress is called after each tool call with the iteration number, action name,
+// and a truncated observation (max 120 chars). Pass nil to disable progress reporting.
+func (l *Loop) Run(ctx context.Context, task string, progress ProgressFunc) (string, error) {
 	systemPrompt := fmt.Sprintf(systemPromptTemplate, l.registry.Descriptions())
 	messages := []llm.Message{
 		{Role: "user", Content: systemPrompt + "\n\nTask:\n" + task},
 	}
 
-	for i := range maxIterations {
+	for i := range MaxIterations {
 		reply, err := l.llm.Complete(ctx, messages)
 		if err != nil {
 			return "", fmt.Errorf("llm complete (iter %d): %w", i, err)
@@ -87,10 +91,18 @@ func (l *Loop) Run(ctx context.Context, task string) (string, error) {
 			}
 		}
 
+		if progress != nil {
+			obs := observation
+			if len(obs) > 120 {
+				obs = obs[:120] + "..."
+			}
+			progress(i+1, action, obs)
+		}
+
 		messages = appendObservation(messages, reply, observation)
 	}
 
-	return "", fmt.Errorf("agent: reached max iterations (%d) without completing task", maxIterations)
+	return "", fmt.Errorf("agent: reached max iterations (%d) without completing task", MaxIterations)
 }
 
 func appendObservation(messages []llm.Message, reply, observation string) []llm.Message {

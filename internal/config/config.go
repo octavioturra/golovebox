@@ -14,6 +14,7 @@ type Config struct {
 	APIKey        string `toml:"api_key"`
 	GitHubToken   string `toml:"github_token"`
 	TelegramToken string `toml:"telegram_token"`
+	DefaultRepo   string `toml:"default_repo"` // "owner/repo" used when Telegram message omits repo
 	QEMUPath      string `toml:"qemu_path"`
 	VMPath        string `toml:"vm_path"`
 	SSHPort       int    `toml:"ssh_port"`

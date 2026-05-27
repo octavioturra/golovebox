@@ -142,6 +142,7 @@ func step4Config(bd string, repair bool) (*config.Config, error) {
 	cfg.APIKey = ask("API Key")
 	cfg.GitHubToken = ask("GitHub Token")
 	cfg.TelegramToken = ask("Telegram Token (optional, Enter to skip)")
+	cfg.DefaultRepo = ask("Default GitHub repo (owner/repo, optional, Enter to skip)")
 	cfg.QEMUPath = filepath.Join(bd, "qemu", "qemu-system-x86_64.exe")
 
 	if err := config.Save(cfg); err != nil {

@@ -4,19 +4,19 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
-	"github.com/user/golovebox/internal/agent"
 	"github.com/user/golovebox/internal/config"
+	"github.com/user/golovebox/internal/gateway"
 	"github.com/user/golovebox/internal/llm"
-	"github.com/user/golovebox/internal/memory"
 	"github.com/user/golovebox/internal/sandbox"
 	"github.com/user/golovebox/internal/setup"
-	"github.com/user/golovebox/internal/tools"
 )
 
 func main() {
@@ -28,6 +28,7 @@ func main() {
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newGitHubCmd())
+	root.AddCommand(newDaemonCmd())
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		os.Exit(1)
 	}
@@ -136,42 +137,13 @@ func newGitHubCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			sshClient, err := sandbox.Dial(
-				"127.0.0.1",
-				strconv.Itoa(cfg.SSHPort),
-				"root",
-				filepath.Join(vmDir, "id_rsa"),
-			)
-			if err != nil {
-				return fmt.Errorf("ssh: %w", err)
-			}
-			defer sshClient.Close()
-
-			fmt.Printf("Fetching issue #%d from %s/%s...\n", issueFlag, owner, repo)
-			issue, err := tools.GetIssue(ctx, cfg.GitHubToken, owner, repo, issueFlag)
-			if err != nil {
-				return fmt.Errorf("get issue: %w", err)
-			}
-			fmt.Printf("Issue: %s\n", issue.GetTitle())
-
-			destPath := "/root/" + repo
-			fmt.Printf("Cloning %s/%s into VM...\n", owner, repo)
-			if err := tools.CloneRepo(sshClient, cfg.GitHubToken, owner, repo, destPath); err != nil {
-				return fmt.Errorf("clone repo: %w", err)
-			}
-
-			memDir, err := cfg.MemoryDir()
-			if err != nil {
-				return err
-			}
-			embFn := memory.NewEmbedFnFromConfig(cfg.LLMProvider, cfg.LLMBaseURL, cfg.APIKey)
-			mem, err := memory.New(memDir, embFn)
-			if err != nil {
-				return fmt.Errorf("memory: %w", err)
-			}
-			if readme, readErr := tools.ReadFile(sshClient, destPath+"/README.md"); readErr == nil {
-				_ = mem.Index(ctx, "readme", string(readme))
-			}
+			pool := sandbox.NewPool(sandbox.PoolConfig{
+				Host:    "127.0.0.1",
+				Port:    cfg.SSHPort,
+				User:    "root",
+				KeyPath: filepath.Join(vmDir, "id_rsa"),
+			})
+			defer pool.Close()
 
 			llmClient := llm.New(llm.Config{
 				BaseURL: cfg.LLMBaseURL,
@@ -179,21 +151,12 @@ func newGitHubCmd() *cobra.Command {
 				Model:   cfg.LLMModel,
 			})
 
-			registry := buildRegistry(cfg, owner, repo, mem)
-
-			fmt.Println("Planning task...")
-			task, err := agent.PlanFromIssue(ctx, llmClient, issue, owner, repo)
-			if err != nil {
-				return fmt.Errorf("plan: %w", err)
-			}
-
-			fmt.Println("Running agent loop...")
-			loop := agent.New(llmClient, registry, mem, sshClient)
-			result, err := loop.Run(ctx, task)
+			gw := gateway.New(pool, llmClient, cfg)
+			fmt.Printf("Resolving issue #%d in %s/%s...\n", issueFlag, owner, repo)
+			result, err := gw.RunTask(ctx, owner, repo, issueFlag, nil)
 			if err != nil {
 				return fmt.Errorf("agent: %w", err)
 			}
-
 			fmt.Println("\n✓ Done:", result)
 			return nil
 		},
@@ -206,145 +169,64 @@ func newGitHubCmd() *cobra.Command {
 	return cmd
 }
 
-// buildRegistry wires all tools with their runtime dependencies via closures.
-// Each tool opens its own SSH connection so they remain independent across loop iterations.
-func buildRegistry(cfg *config.Config, owner, repo string, mem *memory.Memory) *agent.Registry {
-	r := agent.NewRegistry()
+func newDaemonCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "daemon",
+		Short: "Run the gateway daemon (Telegram; Slack and Email are stubs)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
 
-	r.Register(agent.Tool{
-		Name:        "shell",
-		Description: "Execute a shell command in the VM",
-		Parameters:  map[string]string{"cmd": "shell command to execute"},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			vmDir, _ := cfg.VMDir()
-			sc, err := sandbox.Dial("127.0.0.1", strconv.Itoa(cfg.SSHPort),
-				"root", filepath.Join(vmDir, "id_rsa"))
+			cfg, err := config.Load()
 			if err != nil {
-				return "", err
+				return fmt.Errorf("config: %w", err)
 			}
-			defer sc.Close()
-			return tools.Shell(sc, params["cmd"]), nil
-		},
-	})
 
-	r.Register(agent.Tool{
-		Name:        "read_file",
-		Description: "Read a file from the VM",
-		Parameters:  map[string]string{"path": "absolute path to the file"},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			vmDir, _ := cfg.VMDir()
-			sc, err := sandbox.Dial("127.0.0.1", strconv.Itoa(cfg.SSHPort),
-				"root", filepath.Join(vmDir, "id_rsa"))
+			fmt.Println("Starting VM...")
+			mgr, err := sandbox.Start(*cfg)
 			if err != nil {
-				return "", err
+				return fmt.Errorf("start VM: %w", err)
 			}
-			defer sc.Close()
-			data, err := tools.ReadFile(sc, params["path"])
-			return string(data), err
-		},
-	})
+			defer mgr.Stop() //nolint:errcheck
 
-	r.Register(agent.Tool{
-		Name:        "write_file",
-		Description: "Write content to a file in the VM",
-		Parameters: map[string]string{
-			"path":    "absolute path to the file",
-			"content": "file content",
-		},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			vmDir, _ := cfg.VMDir()
-			sc, err := sandbox.Dial("127.0.0.1", strconv.Itoa(cfg.SSHPort),
-				"root", filepath.Join(vmDir, "id_rsa"))
+			vmDir, err := cfg.VMDir()
 			if err != nil {
-				return "", err
+				return err
 			}
-			defer sc.Close()
-			if err := tools.WriteFile(sc, params["path"], []byte(params["content"])); err != nil {
-				return "", err
-			}
-			return "file written", nil
-		},
-	})
+			pool := sandbox.NewPool(sandbox.PoolConfig{
+				Host:    "127.0.0.1",
+				Port:    cfg.SSHPort,
+				User:    "root",
+				KeyPath: filepath.Join(vmDir, "id_rsa"),
+			})
+			defer pool.Close()
 
-	r.Register(agent.Tool{
-		Name:        "list_dir",
-		Description: "List files in a directory in the VM",
-		Parameters:  map[string]string{"path": "absolute path to the directory"},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			vmDir, _ := cfg.VMDir()
-			sc, err := sandbox.Dial("127.0.0.1", strconv.Itoa(cfg.SSHPort),
-				"root", filepath.Join(vmDir, "id_rsa"))
-			if err != nil {
-				return "", err
-			}
-			defer sc.Close()
-			entries, err := tools.ListDir(sc, params["path"])
-			return strings.Join(entries, "\n"), err
-		},
-	})
+			llmClient := llm.New(llm.Config{
+				BaseURL: cfg.LLMBaseURL,
+				APIKey:  cfg.APIKey,
+				Model:   cfg.LLMModel,
+			})
 
-	r.Register(agent.Tool{
-		Name:        "search_memory",
-		Description: "Search the memory store for relevant context",
-		Parameters:  map[string]string{"query": "search query text"},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			results, err := mem.Search(fCtx, params["query"], 3)
-			return strings.Join(results, "\n---\n"), err
-		},
-	})
+			gw := gateway.New(pool, llmClient, cfg)
 
-	r.Register(agent.Tool{
-		Name:        "github_list_issues",
-		Description: "List open issues in the GitHub repository",
-		Parameters:  map[string]string{},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			issues, err := tools.ListIssues(fCtx, cfg.GitHubToken, owner, repo)
-			if err != nil {
-				return "", err
+			if cfg.TelegramToken != "" {
+				th, err := gateway.NewTelegramHandler(cfg.TelegramToken, gw)
+				if err != nil {
+					return fmt.Errorf("telegram: %w", err)
+				}
+				gw.RegisterHandler(th)
+				fmt.Println("Telegram gateway registered.")
+			} else {
+				fmt.Println("No TelegramToken in config — daemon idle (no handlers active).")
 			}
-			var sb strings.Builder
-			for _, iss := range issues {
-				sb.WriteString(fmt.Sprintf("#%d: %s\n", iss.GetNumber(), iss.GetTitle()))
-			}
-			return sb.String(), nil
-		},
-	})
 
-	r.Register(agent.Tool{
-		Name:        "github_get_issue",
-		Description: "Get a specific GitHub issue by number",
-		Parameters:  map[string]string{"number": "issue number"},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			num, err := strconv.Atoi(params["number"])
-			if err != nil {
-				return "", fmt.Errorf("invalid issue number: %s", params["number"])
+			fmt.Println("Daemon running. Press Ctrl+C to stop.")
+			if err := gw.Run(ctx); err != nil {
+				return fmt.Errorf("gateway: %w", err)
 			}
-			iss, err := tools.GetIssue(fCtx, cfg.GitHubToken, owner, repo, num)
-			if err != nil {
-				return "", err
-			}
-			return fmt.Sprintf("Title: %s\nBody:\n%s", iss.GetTitle(), iss.GetBody()), nil
-		},
-	})
 
-	r.Register(agent.Tool{
-		Name:        "github_open_pr",
-		Description: "Open a Pull Request on GitHub",
-		Parameters: map[string]string{
-			"head":  "source branch name",
-			"base":  "target branch (usually main)",
-			"title": "PR title",
-			"body":  "PR description",
+			fmt.Println("Daemon stopped.")
+			return nil
 		},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			base := params["base"]
-			if base == "" {
-				base = "main"
-			}
-			return tools.OpenPR(fCtx, cfg.GitHubToken, owner, repo,
-				params["head"], base, params["title"], params["body"])
-		},
-	})
-
-	return r
+	}
 }

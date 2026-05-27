@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/digitalocean/go-qemu v0.0.0-20250212194115-ee9b0668d242
+	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/google/go-github/v60 v60.0.0
 	github.com/philippgille/chromem-go v0.7.0
 	github.com/pkg/sftp v1.13.10

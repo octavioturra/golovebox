@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	gogithub "github.com/google/go-github/v60/github"
 	"golang.org/x/crypto/ssh"
@@ -24,12 +25,33 @@ func GetIssue(ctx context.Context, token, owner, repo string, number int) (*gogi
 	return issue, err
 }
 
-// CloneRepo runs git clone inside the VM via SSH.
-// The GitHub token is embedded in the HTTPS URL for private repo access.
+// CloneRepo clones a GitHub repository into the VM via SSH.
+// Uses GIT_ASKPASS so the token never appears in git log or ps output.
 func CloneRepo(sshClient *ssh.Client, token, owner, repo, destPath string) error {
-	url := fmt.Sprintf("https://%s@github.com/%s/%s", token, owner, repo)
-	_, _, err := sandbox.Exec(sshClient, fmt.Sprintf("git clone %s %s", url, destPath))
-	return err
+	askpassPath := "/tmp/.golovebox_askpass.sh"
+	// Single-quote the token; replace any embedded single-quotes with '\''.
+	safeToken := strings.ReplaceAll(token, "'", "'\\''")
+	script := fmt.Sprintf("#!/bin/sh\necho '%s'\n", safeToken)
+
+	if err := sandbox.WriteFile(sshClient, askpassPath, []byte(script)); err != nil {
+		return fmt.Errorf("write askpass: %w", err)
+	}
+	if _, _, err := sandbox.Exec(sshClient, "chmod +x "+askpassPath); err != nil {
+		return fmt.Errorf("chmod askpass: %w", err)
+	}
+	defer func() {
+		_, _, _ = sandbox.Exec(sshClient, "rm -f "+askpassPath)
+	}()
+
+	cloneURL := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
+	cloneCmd := fmt.Sprintf("GIT_ASKPASS=%s GIT_USERNAME=x-token git clone %s %s",
+		askpassPath, cloneURL, destPath)
+
+	_, stderr, err := sandbox.Exec(sshClient, cloneCmd)
+	if err != nil {
+		return fmt.Errorf("git clone: %w: %s", err, stderr)
+	}
+	return nil
 }
 
 // OpenPR creates a Pull Request and returns its HTML URL.
