@@ -1,10 +1,13 @@
 # golovebox
 
-Agentic workflow platform with a self-hosted web UI and VM sandbox. Describe work in plain-language Markdown specs, get a visual DAG execution plan, approve checkpoints in the browser, and receive Pull Requests — all from a single 14 MB Windows binary with zero installation.
+Agentic workflow platform with a self-hosted web UI and VM sandbox. Describe work in plain-language Markdown specs, get a visual DAG execution plan, approve checkpoints in the browser, and receive Pull Requests — all from a **single self-contained Windows binary** with zero installation.
 
 ```
-golovebox web   →   opens localhost:8080
+golovebox init   →   extracts QEMU, installs Alpine VM, generates SSH keys, configures
+golovebox web    →   opens localhost:8080
 ```
+
+> **Self-contained since Phase 5**: QEMU binaries and Alpine ISO are embedded inside the binary at build time. No manual downloads. No prerequisites beyond the binary itself.
 
 ---
 
@@ -33,60 +36,32 @@ Every `shell`, `read_file`, `write_file` call runs inside an **Alpine Linux QEMU
 
 ---
 
-## Prerequisites
-
-### QEMU
-
-Download the Windows installer from **https://www.qemu.org/download/#windows** or the nightly builds from **https://qemu.weilnetz.de/w64/**.
-
-After installing, copy `qemu-system-x86_64.exe` to `.golovebox/qemu/`:
-
-```
-.golovebox/qemu/qemu-system-x86_64.exe
-```
-
-### Alpine VM image
-
-You need a qcow2 disk image with Alpine Linux, SSH server enabled, and root login via key. Place it at:
-
-```
-.golovebox/vm/base.img
-```
-
-Build one with:
-
-```bash
-# On any Linux machine with qemu-img + virt-customize:
-qemu-img create -f qcow2 base.img 4G
-# ... install Alpine, enable sshd, authorise id_rsa.pub for root
-```
-
-Or use any pre-built Alpine qcow2 that allows root SSH login.
-
-### SSH key pair
-
-Generate a key pair for host↔VM communication (one-liner, no passphrase):
-
-```bash
-ssh-keygen -t rsa -b 4096 -f .golovebox/vm/id_rsa -N "" -C "golovebox-vm"
-```
-
-Copy `.golovebox/vm/id_rsa.pub` into the VM's `/root/.ssh/authorized_keys`.
-
----
-
 ## Quick start
 
-### 1. Initialize
+### 1. Initialize (one-time setup)
 
 ```
 golovebox init
 ```
 
-Creates `.golovebox/` next to the binary and runs an interactive wizard for all API keys. Ends with a smoke test (`echo ok` via SSH into the VM).
+This runs a fully automated 9-step setup:
+
+| Step | What happens |
+|---|---|
+| 1 | Create `.golovebox/` directory tree |
+| 2 | Extract embedded QEMU binaries to `.golovebox/qemu/` |
+| 3 | Extract embedded Alpine Virt ISO to `.golovebox/vm/` |
+| 4 | Generate RSA 4096 SSH key pair in `.golovebox/vm/` |
+| 5 | Create 8 GB qcow2 disk image (base.img) |
+| 6 | Build cloud-init CIDATA ISO with SSH key |
+| 7 | Boot Alpine from ISO — VM installs itself and powers off (up to 10 min) |
+| 8 | Interactive wizard: LLM provider, API keys, GitHub token |
+| 9 | Smoke test: start VM, SSH in, `echo ok` |
+
+All steps are idempotent — safe to re-run. To redo only incomplete steps:
 
 ```
-golovebox init --repair   # skips steps whose artifacts already exist
+golovebox init --repair
 ```
 
 ### 2. Open the web UI
@@ -148,19 +123,14 @@ Parses the specs, asks the LLM for an execution plan, and runs the DAG with term
 
 Skills are reusable agent behaviour templates stored as `.md` files in `.golovebox/skills/`.
 
-**List available skills:**
 ```
 golovebox skill list
-```
-
-**Generate a skill from a description:**
-```
 golovebox skill generate "review a Go REST API for naming conventions and security"
 ```
 
-This calls the LLM, produces a structured `.md` skill file, and saves it to `.golovebox/skills/`. The orchestrator automatically includes skill descriptions in its planning context.
+The orchestrator automatically includes skill descriptions in its planning context.
 
-**Skill file format** (TOML frontmatter):
+**Skill file format** (TOML frontmatter + freeform prompt):
 ```markdown
 ---
 name = "go_api_review"
@@ -230,6 +200,127 @@ POST /api/skills/generate              body: {"description":"..."}, returns Skil
 
 ---
 
+## Building from source
+
+The build pipeline is managed by [Mage](https://magefile.org/). **Do not run `go build` directly** — embedded assets must be populated first.
+
+### Prerequisites
+
+- Go 1.22+
+- Mage: `go install github.com/magefile/mage@latest`
+- GNU tar with zstd support (for Windows QEMU extraction)
+  - Linux: `tar --version` should show GNU tar 1.31+
+  - macOS: `brew install gnu-tar` if BSD tar doesn't support `--zstd`
+
+### Build steps
+
+```bash
+git clone https://github.com/octavioturra/golovebox
+cd golovebox
+
+# 1. Download QEMU binaries (Windows amd64) + Alpine Virt ISO
+#    Places assets in internal/embed/assets/ (~200 MB download)
+TARGET_OS=windows mage fetchWindows
+mage fetchAlpine
+
+# 2. Cross-compile for Windows (CGO_ENABLED=0, single binary)
+mage buildWindows
+# → build/golovebox.exe  (~300 MB with embedded assets)
+
+# For development on Linux (uses system QEMU, no embedding):
+mage build
+# → build/golovebox  (~14 MB, placeholder assets)
+```
+
+### Available Mage targets
+
+| Target | Description |
+|---|---|
+| `mage fetch` | Download assets for the current host OS |
+| `mage fetchAlpine` | Download only the Alpine Virt ISO |
+| `mage fetchWindows` | Download Windows amd64 QEMU from MSYS2 |
+| `mage build` | Compile for current OS/arch |
+| `mage buildWindows` | Cross-compile for Windows amd64 |
+| `mage clean` | Remove downloaded assets (keeps placeholder.txt) |
+| `mage check` | Run `go vet ./...` |
+
+### How the embedded assets work
+
+```
+internal/embed/assets/
+├── alpine/
+│   ├── placeholder.txt        ← committed — lets go:embed compile
+│   └── alpine-virt-x86_64.iso ← added by "mage fetchAlpine" (gitignored)
+└── qemu/
+    ├── windows-amd64/
+    │   ├── placeholder.txt    ← committed
+    │   ├── bin/               ← added by "mage fetchWindows"
+    │   │   ├── qemu-system-x86_64.exe
+    │   │   ├── qemu-img.exe
+    │   │   └── *.dll
+    │   └── share/qemu/        ← firmware (bios-256k.bin, efi-virtio.rom…)
+    ├── linux-amd64/
+    │   ├── placeholder.txt
+    │   └── qemu-system-x86_64 ← add manually from system package
+    └── darwin-arm64/
+        └── placeholder.txt
+```
+
+Go's `//go:embed` picks up the entire directory tree at compile time. A **placeholder build** (just `go build` without assets) compiles cleanly — `golovebox init` will fail with a clear error message:
+
+```
+QEMU/Alpine assets not embedded: run 'mage fetch' before 'mage build'
+```
+
+On Windows, `golovebox init` step 7 passes `-L .golovebox/qemu/share/qemu` to QEMU automatically so it finds the embedded firmware.
+
+---
+
+## Testing
+
+### Unit / vet
+
+```bash
+mage check        # go vet ./...
+go test ./...     # run tests (no VM needed)
+```
+
+### Smoke test (end-to-end)
+
+The `golovebox init` smoke test (step 9) is the canonical end-to-end test. After a full init:
+
+```
+golovebox status           # shows VM running + SSH connectivity
+golovebox exec "uname -a"  # direct shell command in VM
+```
+
+### Testing the web UI
+
+```bash
+# Start web server in dev mode (system QEMU, no embedded assets needed)
+golovebox web
+
+# Then open http://localhost:8080 and:
+# 1. Upload a .md spec file
+# 2. Watch the DAG canvas populate with pending nodes
+# 3. Observe nodes go yellow (running) → green (done)
+# 4. Click any orange node to approve a checkpoint
+```
+
+### Testing a single DAG run from CLI
+
+```bash
+cat > /tmp/test-spec.md << 'EOF'
+# Test run
+Create a file /tmp/hello.txt with content "golovebox ok".
+RUN_TEST: test -f /tmp/hello.txt
+EOF
+
+golovebox run /tmp/test-spec.md
+```
+
+---
+
 ## Configuration
 
 `.golovebox/config.toml` (created by `golovebox init`):
@@ -244,7 +335,8 @@ telegram_token = "123456:ABC-..."      # optional — enables Telegram daemon
 default_repo   = "owner/repo"          # fallback repo for Telegram commands
 ssh_port       = 2222
 qmp_port       = 4444
-qemu_path      = ".golovebox/qemu/qemu-system-x86_64.exe"
+# qemu_path is auto-derived from .golovebox/qemu/; set only to override:
+# qemu_path    = "/custom/path/qemu-system-x86_64"
 ```
 
 ### Supported LLM providers
@@ -260,20 +352,26 @@ qemu_path      = ".golovebox/qemu/qemu-system-x86_64.exe"
 
 ## Runtime data layout
 
-Everything lives in `.golovebox/` next to the binary:
+Everything lives in `.golovebox/` next to the binary — never in system paths:
 
 ```
 .golovebox/
 ├── config.toml
-├── qemu/
-│   └── qemu-system-x86_64.exe
+├── qemu/                     ← extracted at init (embedded in binary)
+│   ├── bin/
+│   │   ├── qemu-system-x86_64.exe
+│   │   ├── qemu-img.exe
+│   │   └── *.dll
+│   └── share/qemu/           ← BIOS firmware, VirtIO ROMs
 ├── vm/
-│   ├── base.img          ← Alpine qcow2
-│   ├── id_rsa            ← SSH private key (host → VM)
+│   ├── alpine-virt-x86_64.iso ← extracted at init
+│   ├── cidata.iso             ← cloud-init CIDATA (generated at init)
+│   ├── base.img               ← 8 GB qcow2, Alpine installed here
+│   ├── id_rsa                 ← SSH private key (generated at init)
 │   └── id_rsa.pub
-├── memory/               ← chromem-go vector embeddings
+├── memory/                   ← chromem-go vector embeddings
 ├── logs/
-├── skills/               ← reusable skill .md files
+├── skills/                   ← reusable skill .md files
 │   └── go_api_review.md
 └── runs/
     └── run-20250601-a3f9c2/
@@ -292,7 +390,7 @@ Everything lives in `.golovebox/` next to the binary:
 ## CLI reference
 
 ```
-golovebox init [--repair]              Initialize environment
+golovebox init [--repair]              Initialize environment (automated, ~10 min first run)
 golovebox web [--addr :8080]          Start web UI (primary interface)
 
 golovebox run <dir-or-file>           Execute specs through DAG orchestrator
@@ -329,20 +427,6 @@ Progress updates are sent as the agent works:
 
 ---
 
-## Building from source
-
-```bash
-git clone https://github.com/octavioturra/golovebox
-cd golovebox
-go mod tidy
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./cmd/golovebox
-# → golovebox.exe (~14 MB)
-```
-
-Requirements: Go 1.22+. No C toolchain. `CGO_ENABLED=0`.
-
----
-
 ## Security notes
 
 - **Token isolation**: `CloneRepo` uses `GIT_ASKPASS` with a UUID-named temp script — the token never appears in `git log` or `ps aux`.
@@ -357,17 +441,24 @@ Requirements: Go 1.22+. No C toolchain. `CGO_ENABLED=0`.
 ```
 golovebox/
 ├── cmd/golovebox/main.go       CLI entry point
+├── magefile.go                 Build pipeline (mage targets)
 └── internal/
     ├── agent/                  ReAct loop + tool registry + planner
     ├── config/                 Portable paths (relative to executable)
     ├── dag/                    DAG, Executor (parallel), CheckpointManager
     ├── dsl/                    Keyword parser for spec .md files
+    ├── embed/                  Embedded QEMU + Alpine ISO assets
+    │   ├── assets/             Populated by "mage fetch" (gitignored)
+    │   ├── extract.go          ExtractQEMU, ExtractAlpineISO
+    │   ├── keygen.go           RSA 4096 SSH keypair generation
+    │   ├── cloudinit.go        cloud-init CIDATA ISO builder
+    │   └── installboot.go      First-boot Alpine installer via QEMU
     ├── gateway/                Handler interface, Gateway, TelegramHandler
     ├── llm/                    HTTP client (OpenAI-compat + Anthropic, retry)
     ├── memory/                 chromem-go vector store + embeddings
     ├── orchestrator/           Specs → DAG via LLM planning
     ├── sandbox/                QEMU manager, SSH pool, SSH/SFTP helpers
-    ├── setup/                  Init wizard (5 steps)
+    ├── setup/                  Init wizard (9 automated steps)
     ├── skills/                 Skill registry + LLM generator
     ├── tools/                  Shell, file, GitHub primitives
     └── web/                    HTTP server, SSE broker, embedded UI
@@ -383,4 +474,5 @@ golovebox/
 | 2 | ✅ | Agent — ReAct loop, LLM client, GitHub tools, vector memory |
 | 3 | ✅ | Gateway — Telegram bot, SSH pool, GIT_ASKPASS, LLM retry |
 | 4 | ✅ | Platform — DAG orchestrator, web chat, skills, parallel execution |
-| 5 | planned | Auth, HTTPS, multi-tenant, skill marketplace, streaming output |
+| 5 | ✅ | Self-contained — embedded QEMU + Alpine ISO, Mage build pipeline, automated init |
+| 6 | planned | Auth, HTTPS, multi-tenant, skill marketplace, streaming output |
