@@ -1,0 +1,261 @@
+{
+  "project": "golovebox",
+  "tagline": "Portable, self-hosted, VM-sandboxed, intention-DSL agentic workflow platform.",
+  "status": "phase-4 complete — orchestrator + web chat + skills, golovebox.exe 14MB (pre-embed)",
+
+  "vision_one_line": "Devin + n8n + Temporal, em um binário, self-hosted, orientado a intenção natural.",
+
+  "philosophy": {
+    "portable_app": true,
+    "base_dir": "filepath.Join(filepath.Dir(os.Executable()), \".golovebox\")",
+    "no_writes_outside_base_dir": true,
+    "no_admin_required": true,
+    "no_cgo": true,
+    "build_command": "mage build — nunca go build direto",
+    "self_hosted": true,
+    "zero_cloud_dependency": true,
+    "single_binary": true,
+    "offline_capable": true,
+    "zero_cognitive_effort": "init funciona sem nenhum passo manual do usuário"
+  },
+
+  "platform": {
+    "primary": "Windows x86_64",
+    "v1_targets": ["Linux x86_64", "macOS arm64"]
+  },
+
+  "binary_composition": {
+    "description": "Binário embute QEMU + Alpine ISO via go:embed. Init extrai, configura VM e funciona offline.",
+    "embed_strategy": "build tags por OS selecionam assets corretos (windows/linux/darwin)",
+    "assets": {
+      "qemu_windows": "~87MB — extraído do MSYS2 package (.pkg.tar.zst)",
+      "qemu_linux": "~40MB — extraído do Alpine/Ubuntu package",
+      "qemu_darwin": "~60MB — extraído do Homebrew bottle",
+      "alpine_iso": "~50MB — alpine-virt oficial, mesma ISO para todos os OS"
+    },
+    "total_binary_size": "~150MB por plataforma",
+    "sources": {
+      "qemu_windows": "https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-qemu-*.pkg.tar.zst",
+      "qemu_linux": "http://archive.ubuntu.com/ubuntu/pool/universe/q/qemu/ ou Alpine apk",
+      "qemu_darwin": "https://formulae.brew.sh/api/formula/qemu.json → bottle URL",
+      "alpine_iso": "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/alpine-virt-*-x86_64.iso"
+    }
+  },
+
+  "build_system": {
+    "tool": "Mage (github.com/magefile/mage) — build system em Go puro",
+    "targets": {
+      "mage fetch": "baixa QEMU (todas archs) + Alpine ISO → build/assets/",
+      "mage fetchQemu": "só QEMU",
+      "mage fetchAlpine": "só Alpine ISO",
+      "mage build": "fetch (se ausente) + go build para OS atual",
+      "mage buildAll": "fetch + go build para windows/linux/darwin",
+      "mage clean": "remove build/assets/ e binários",
+      "mage check": "verifica assets presentes e checksums"
+    },
+    "dev_setup": "go install github.com/magefile/mage@latest && mage fetch",
+    "assets_in_git": false,
+    "gitignore": ["build/assets/", "internal/embed/assets/", "*.iso", "*.img", "*.qcow2"]
+  },
+
+  "vm_setup": {
+    "approach": "Alpine ISO oficial + cloud-init NoCloud — zero imagem pré-construída",
+    "flow": [
+      "extrair QEMU embutido → .golovebox/qemu/",
+      "extrair Alpine ISO embutida → .golovebox/vm/alpine-virt.iso",
+      "gerar keypair SSH → .golovebox/vm/id_rsa + id_rsa.pub",
+      "gerar cloud-init disk (ISO9660, label CIDATA) com user-data + pubkey",
+      "qemu-img create base.img 8G",
+      "boot: ISO + base.img + cidata.iso → cloud-init configura SSH + pacotes + poweroff",
+      "boot normal → SSH echo ok → pronto"
+    ],
+    "cloud_init_lib": "github.com/kdomanski/iso9660 — pure Go, zero CGO",
+    "user_data_packages": ["git", "go", "python3", "nodejs", "gcc", "make", "curl", "openssh"],
+    "install_time": "3-5 minutos (uma vez)",
+    "result": "golovebox init funciona completamente offline após o build"
+  },
+
+  "core_concepts": {
+    "intention_dsl": {
+      "description": "Linguagem natural com anotações semânticas. Prosa legível por humano, parseável por agente.",
+      "keywords": {
+        "ATTENTION_HERE": "pausa o grafo, aguarda revisão humana via web chat",
+        "NOTIFY_ME": "envia notificação ao operador e continua",
+        "NO_RETRY": "se falhar, para tudo",
+        "TRY ... OR_ELSE ...": "tenta A; se falhar, executa B",
+        "NOT_TODO": "registra como débito técnico, não executa",
+        "PAUSE_TO_REVIEW": "bloqueia, aguarda aprovação",
+        "RUN_TEST": "gate: só avança se testes passarem",
+        "WHEN ... DO ...": "trigger condicional — espera evento externo"
+      },
+      "format": "prosa livre com keywords em MAIÚSCULAS opcionais"
+    },
+
+    "dag_execution": {
+      "node_types": ["task", "checkpoint", "gate", "notify", "parallel", "conditional", "wait_event", "try_else"],
+      "persistence": ".golovebox/runs/ — retomável após crash",
+      "parallelism": "max 3 nodes simultâneos"
+    },
+
+    "agents": {
+      "orchestrator": "specs DSL → DAG → dispatch sub-agentes → aggregate",
+      "skill_layers": {
+        "tool": "função Go pura — shell, file, http, github...",
+        "skill": "tool(s) + prompt template + exemplos",
+        "agent": "skill especializado com identidade e memória isolada"
+      }
+    },
+
+    "skill_system": {
+      "local_registry": ".golovebox/skills/ — markdown com frontmatter TOML",
+      "generate_command": "golovebox skill generate <descrição>",
+      "remote_registry": "ClaWHub — V2"
+    },
+
+    "web_chat": {
+      "description": "Interface primária. HTTP server embutido, HTML+JS via embed.FS.",
+      "node_states": {
+        "pending": "cinza #9ca3af",
+        "running": "amarelo #fbbf24",
+        "done": "verde #34d399",
+        "error": "vermelho #f87171",
+        "waiting_human": "laranja #fb923c"
+      },
+      "sse_updates": "/api/runs/{id}/stream"
+    }
+  },
+
+  "stack": {
+    "cli": "spf13/cobra",
+    "config": "BurntSushi/toml",
+    "llm": "net/http próprio — OpenAI-compatible, sem SDK, BaseURL swappable",
+    "web_server": "net/http + embed.FS",
+    "build_system": "github.com/magefile/mage",
+    "qemu_extract": "github.com/klauspost/compress/zstd + archive/tar (só no magefile)",
+    "cloud_init_iso": "github.com/kdomanski/iso9660 — pure Go, zero CGO",
+    "ssh_sftp": "golang.org/x/crypto/ssh + github.com/pkg/sftp",
+    "qemu_control": "digitalocean/go-qemu (QMP, pure Go)",
+    "memory": "philippgille/chromem-go v0.7.0 (pure Go, zero CGO)",
+    "github": "google/go-github/v60",
+    "browser": "go-rod/rod",
+    "telegram": "go-telegram-bot-api/telegram-bot-api/v5 — canal secundário",
+    "uuid": "github.com/google/uuid"
+  },
+
+  "stack_decisions": {
+    "why_not_goclaw": "application framework — all packages are internal/",
+    "why_not_anthropic_sdk": "heavy, provider lock-in",
+    "why_not_sqlite_vec": "requer CGO",
+    "why_not_temporal": "infraestrutura pesada",
+    "why_not_n8n": "usuário não monta o grafo — agente monta a partir de specs DSL",
+    "why_not_prebuilt_alpine": "viola zero-effort; Alpine ISO + cloud-init usa fonte oficial e é mais simples",
+    "why_not_github_releases": "dependência externa, transfere controle para terceiro",
+    "why_no_zip_qemu": "não existe zip oficial de QEMU para Windows — MSYS2 .pkg.tar.zst é a fonte correta",
+    "why_embed_everything": "zero esforço cognitivo: usuário não baixa nada, não configura nada",
+    "why_mage": "build system em Go puro, sem Makefile, sem shell script",
+    "llm_client": "POST /v1/messages, anthropic-version condicional por URL, zero código condicional por provider"
+  },
+
+  "llm_providers": {
+    "claude":  { "base_url": "https://api.anthropic.com",                "model_example": "claude-opus-4-5" },
+    "openai":  { "base_url": "https://api.openai.com",                   "model_example": "gpt-4o" },
+    "gemini":  { "base_url": "https://generativelanguage.googleapis.com", "model_example": "gemini-1.5-pro" },
+    "ollama":  { "base_url": "http://localhost:11434",                    "model_example": "llama3" }
+  },
+
+  "sandbox": {
+    "technology": "QEMU",
+    "source_windows": "MSYS2 .pkg.tar.zst extraído no build",
+    "source_linux": "Ubuntu .deb ou Alpine .apk extraído no build",
+    "source_darwin": "Homebrew bottle extraído no build",
+    "install_location": ".golovebox/qemu/",
+    "vm_image_source": "Alpine virt ISO oficial — configurada via cloud-init no primeiro init",
+    "vm_location": ".golovebox/vm/base.img",
+    "host_vm_exec": "SSH localhost:2222",
+    "host_vm_files": "SFTP",
+    "host_vm_control": "QMP TCP localhost:4444"
+  },
+
+  "agent_loop": {
+    "pattern": "Plan-and-Execute sobre ReAct",
+    "format": "Thought/Action/Parameters texto puro",
+    "max_iterations": 20,
+    "termination": "Action: done | Action: error | 20 iter timeout"
+  },
+
+  "memory": {
+    "lib": "philippgille/chromem-go v0.7.0",
+    "persistence": ".golovebox/memory/",
+    "scope": "por agente — cada sub-agente tem coleção isolada"
+  },
+
+  "run_persistence": {
+    "location": ".golovebox/runs/<run-id>/",
+    "contents": ["dag.json", "node_states.json", "logs/", "artifacts/", "specs/"],
+    "resume": "golovebox resume <run-id>"
+  },
+
+  "project_structure": {
+    "magefile.go": "fetch, build, buildAll, clean, check",
+    "build/fetch_qemu.go": "download QEMU por OS",
+    "build/fetch_alpine.go": "download Alpine ISO",
+    "build/assets/": "gerado pelo mage fetch — não commitado",
+    "internal/embed/embed_windows.go": "//go:embed qemu/windows + alpine ISO",
+    "internal/embed/embed_linux.go": "//go:embed qemu/linux + alpine ISO",
+    "internal/embed/embed_darwin.go": "//go:embed qemu/darwin + alpine ISO",
+    "internal/setup/init.go": "extrai assets, keypair, cloud-init disk, install boot",
+    "internal/sandbox/qemu.go": "QEMUExePath/QEMUImgPath dinâmicos por runtime.GOOS",
+    "internal/config/config.go": "portable paths",
+    "internal/llm/client.go": "HTTP client OpenAI-compatible + retry",
+    "internal/dsl/parser.go": "parse DSL → AST",
+    "internal/dag/dag.go": "grafo de execução",
+    "internal/dag/executor.go": "paralelo, persist atômico",
+    "internal/dag/checkpoint.go": "pause/gate/notify",
+    "internal/orchestrator/orchestrator.go": "specs → DAG via LLM",
+    "internal/agent/loop.go": "ReAct loop + ProgressFunc",
+    "internal/agent/tools.go": "tool registry",
+    "internal/skills/registry.go": "skills locais",
+    "internal/skills/generator.go": "gera skill via LLM",
+    "internal/tools/shell.go": "SSH exec",
+    "internal/tools/files.go": "SFTP",
+    "internal/tools/github.go": "issues + PR + GIT_ASKPASS",
+    "internal/web/server.go": "HTTP + SSE",
+    "internal/web/static/index.html": "web chat + DAG canvas",
+    "internal/memory/memory.go": "chromem-go",
+    "internal/sandbox/pool.go": "SSH pool com liveness check",
+    "internal/gateway/gateway.go": "router de canais",
+    "internal/gateway/telegram.go": "Telegram handler"
+  },
+
+  "roadmap": [
+    { "phase": 1, "name": "Portable Foundation",   "status": "complete", "result": "18MB" },
+    { "phase": 2, "name": "Agent Loop",             "status": "complete", "result": "13MB" },
+    { "phase": 3, "name": "Gateway + Daemon",       "status": "complete", "result": "13MB" },
+    { "phase": 4, "name": "Orchestrator + Web UI",  "status": "complete", "result": "14MB" },
+    {
+      "phase": 5,
+      "name": "Self-Contained Binary",
+      "status": "next",
+      "goal": "QEMU + Alpine ISO embutidos, init offline, mage como build system",
+      "smoke_test": "mage build && ./golovebox init → pronto, zero passos manuais",
+      "expected_size": "~150MB por plataforma"
+    },
+    {
+      "phase": 6,
+      "name": "External Integrations",
+      "status": "planned",
+      "goal": "WHEN/DO triggers, email, deploy hooks, NOTIFY_ME multicanal"
+    }
+  ],
+
+  "out_of_scope_v1": [
+    "Windows Defender signing",
+    "auto-update",
+    "ClaWHub remote registry",
+    "Jira / Linear / Notion",
+    "multi-tenant",
+    "mobile UI"
+  ],
+
+  "v1_done_definition": "Jogar 10 arquivos de spec DSL no golovebox, ver DAG gerado, sub-agentes construírem a aplicação na VM, checkpoints pausarem no web chat, resultado ser código testado e PR aberta — a partir de um único .exe, sem instalar nada, sem baixar nada, sem passo manual algum."
+}
