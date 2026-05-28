@@ -3,3 +3,20 @@
 *.so
 *.dylib
 .golovebox/
+
+# Downloaded QEMU binaries and Alpine ISO (populated by "mage fetch")
+# placeholder.txt files in these dirs ARE committed to allow go:embed to compile.
+internal/embed/assets/qemu/windows-amd64/*
+!internal/embed/assets/qemu/windows-amd64/placeholder.txt
+internal/embed/assets/qemu/linux-amd64/*
+!internal/embed/assets/qemu/linux-amd64/placeholder.txt
+internal/embed/assets/qemu/darwin-arm64/*
+!internal/embed/assets/qemu/darwin-arm64/placeholder.txt
+internal/embed/assets/alpine/*
+!internal/embed/assets/alpine/placeholder.txt
+
+# Build artifacts
+build/
+*.qcow2
+*.img
+*.iso

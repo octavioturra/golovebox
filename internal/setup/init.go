@@ -1,66 +1,75 @@
 package setup
 
 import (
-	"archive/zip"
 	"bufio"
+	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
+	embedassets "github.com/user/golovebox/internal/embed"
+
 	"github.com/user/golovebox/internal/config"
 	"github.com/user/golovebox/internal/sandbox"
 )
-
-// qemuZipURL is a placeholder — weilnetz.de distributes an installer (.exe), not a zip.
-// Replace with a direct zip URL when one becomes available, or install QEMU manually.
-const qemuZipURL = "https://qemu.weilnetz.de/w64/2024/qemu-w64-setup-20240423.exe"
-
-// alpineImageURL is a placeholder for the custom Alpine+toolchain qcow2 image.
-const alpineImageURL = "https://example.com/alpine-golovebox.qcow2"
 
 func NewInitCmd() *cobra.Command {
 	var repair bool
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Initialize golovebox environment (download QEMU, VM image, configure)",
+		Short: "Initialize golovebox environment (extract QEMU, install Alpine VM, configure)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInit(repair)
+			return runInit(cmd.Context(), repair)
 		},
 	}
-	cmd.Flags().BoolVar(&repair, "repair", false, "skip steps already completed")
+	cmd.Flags().BoolVar(&repair, "repair", false, "re-run only steps that have not completed")
 	return cmd
 }
 
-func runInit(repair bool) error {
+func runInit(ctx context.Context, repair bool) error {
 	bd, err := config.BaseDir()
 	if err != nil {
 		return err
 	}
+	qemuDir := filepath.Join(bd, "qemu")
+	vmDir := filepath.Join(bd, "vm")
 
-	if err := step1Dirs(bd, repair); err != nil {
+	if err := step1Dirs(bd); err != nil {
 		return fmt.Errorf("step 1 (dirs): %w", err)
 	}
-	if err := step2QEMU(bd, repair); err != nil {
+	if err := step2ExtractQEMU(qemuDir); err != nil {
 		return fmt.Errorf("step 2 (qemu): %w", err)
 	}
-	if err := step3AlpineImage(bd, repair); err != nil {
-		return fmt.Errorf("step 3 (vm image): %w", err)
+	if err := step3ExtractAlpine(vmDir); err != nil {
+		return fmt.Errorf("step 3 (alpine): %w", err)
 	}
-	cfg, err := step4Config(bd, repair)
+	pubKey, err := step4SSHKeypair(vmDir)
 	if err != nil {
-		return fmt.Errorf("step 4 (config): %w", err)
+		return fmt.Errorf("step 4 (keygen): %w", err)
 	}
-	if err := step5SmokeTest(cfg); err != nil {
-		return fmt.Errorf("step 5 (smoke test): %w", err)
+	if err := step5CreateDisk(qemuDir, vmDir); err != nil {
+		return fmt.Errorf("step 5 (disk): %w", err)
+	}
+	if err := step6CloudInit(vmDir, pubKey); err != nil {
+		return fmt.Errorf("step 6 (cloud-init): %w", err)
+	}
+	if err := step7InstallBoot(ctx, qemuDir, vmDir); err != nil {
+		return fmt.Errorf("step 7 (install): %w", err)
+	}
+	cfg, err := step8Config(bd, repair)
+	if err != nil {
+		return fmt.Errorf("step 8 (config): %w", err)
+	}
+	if err := step9SmokeTest(cfg); err != nil {
+		return fmt.Errorf("step 9 (smoke test): %w", err)
 	}
 	return nil
 }
 
-func step1Dirs(bd string, repair bool) error {
+func step1Dirs(bd string) error {
 	dirs := []string{
 		filepath.Join(bd, "qemu"),
 		filepath.Join(bd, "vm"),
@@ -70,55 +79,75 @@ func step1Dirs(bd string, repair bool) error {
 		filepath.Join(bd, "skills"),
 	}
 	for _, d := range dirs {
-		if repair {
-			if _, err := os.Stat(d); err == nil {
-				continue
-			}
-		}
-		fmt.Printf("Creating %s\n", d)
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
 	}
+	fmt.Println("[init] Directories created.")
 	return nil
 }
 
-func step2QEMU(bd string, repair bool) error {
-	marker := filepath.Join(bd, "qemu", "qemu-system-x86_64.exe")
-	if repair {
-		if _, err := os.Stat(marker); err == nil {
-			fmt.Println("[step 2] QEMU already installed, skipping.")
-			return nil
-		}
+func step2ExtractQEMU(qemuDir string) error {
+	fmt.Println("[init] Extracting QEMU binaries...")
+	if err := embedassets.ExtractQEMU(qemuDir); err != nil {
+		return err
 	}
-	// TODO: replace qemuZipURL with a direct .zip download when available.
-	// For now, extract manually or provide a pre-built qemu-system-x86_64.exe.
-	fmt.Printf("[step 2] TODO: download QEMU from %s\n", qemuZipURL)
-	fmt.Printf("[step 2] Place qemu-system-x86_64.exe in: %s\n", filepath.Join(bd, "qemu"))
+	fmt.Println("[init] QEMU ready.")
 	return nil
 }
 
-func step3AlpineImage(bd string, repair bool) error {
-	dest := filepath.Join(bd, "vm", "base.img")
-	if repair {
-		if _, err := os.Stat(dest); err == nil {
-			fmt.Println("[step 3] VM image already exists, skipping.")
-			return nil
-		}
+func step3ExtractAlpine(vmDir string) error {
+	fmt.Println("[init] Extracting Alpine ISO...")
+	if err := embedassets.ExtractAlpineISO(vmDir); err != nil {
+		return err
 	}
-	if strings.HasPrefix(alpineImageURL, "https://example.com") {
-		fmt.Printf("[step 3] TODO: set a real Alpine image URL (placeholder: %s)\n", alpineImageURL)
-		return nil
-	}
-	fmt.Printf("[step 3] Downloading VM image to %s ...\n", dest)
-	return downloadFile(alpineImageURL, dest)
+	fmt.Println("[init] Alpine ISO ready.")
+	return nil
 }
 
-func step4Config(bd string, repair bool) (*config.Config, error) {
+func step4SSHKeypair(vmDir string) (string, error) {
+	fmt.Println("[init] Generating SSH keypair...")
+	pubKey, err := embedassets.GenerateSSHKeypair(vmDir)
+	if err != nil {
+		return "", err
+	}
+	fmt.Println("[init] SSH keypair ready.")
+	return pubKey, nil
+}
+
+func step5CreateDisk(qemuDir, vmDir string) error {
+	fmt.Println("[init] Creating VM disk image...")
+	if err := embedassets.CreateDisk(qemuDir, vmDir); err != nil {
+		return err
+	}
+	fmt.Println("[init] Disk image ready.")
+	return nil
+}
+
+func step6CloudInit(vmDir, pubKey string) error {
+	fmt.Println("[init] Building cloud-init CIDATA disk...")
+	cidataPath := filepath.Join(vmDir, "cidata.iso")
+	if err := embedassets.CreateCloudInitISO(cidataPath, pubKey); err != nil {
+		return err
+	}
+	fmt.Println("[init] Cloud-init disk ready.")
+	return nil
+}
+
+func step7InstallBoot(ctx context.Context, qemuDir, vmDir string) error {
+	fmt.Println("[init] Running first-boot Alpine install (up to 10 min)...")
+	if err := embedassets.RunInstallBoot(ctx, qemuDir, vmDir); err != nil {
+		return err
+	}
+	fmt.Println("[init] Alpine installed.")
+	return nil
+}
+
+func step8Config(bd string, repair bool) (*config.Config, error) {
 	cf := filepath.Join(bd, "config.toml")
 	if repair {
 		if _, err := os.Stat(cf); err == nil {
-			fmt.Println("[step 4] Config already exists, skipping.")
+			fmt.Println("[init] Config already exists, skipping.")
 			return config.Load()
 		}
 	}
@@ -145,17 +174,22 @@ func step4Config(bd string, repair bool) (*config.Config, error) {
 	cfg.GitHubToken = ask("GitHub Token")
 	cfg.TelegramToken = ask("Telegram Token (optional, Enter to skip)")
 	cfg.DefaultRepo = ask("Default GitHub repo (owner/repo, optional, Enter to skip)")
-	cfg.QEMUPath = filepath.Join(bd, "qemu", "qemu-system-x86_64.exe")
+
+	qemuExe := "qemu-system-x86_64"
+	if runtime.GOOS == "windows" {
+		qemuExe = filepath.Join("bin", qemuExe+".exe")
+	}
+	cfg.QEMUPath = filepath.Join(bd, "qemu", qemuExe)
 
 	if err := config.Save(cfg); err != nil {
 		return nil, err
 	}
-	fmt.Printf("[step 4] Config saved to %s\n", cf)
+	fmt.Printf("[init] Config saved to %s\n", cf)
 	return cfg, nil
 }
 
-func step5SmokeTest(cfg *config.Config) error {
-	fmt.Println("[step 5] Starting smoke test...")
+func step9SmokeTest(cfg *config.Config) error {
+	fmt.Println("[init] Running smoke test...")
 	vmDir, err := cfg.VMDir()
 	if err != nil {
 		return err
@@ -183,67 +217,4 @@ func step5SmokeTest(cfg *config.Config) error {
 	}
 	fmt.Println("golovebox pronto ✓")
 	return nil
-}
-
-func downloadFile(url, dest string) error {
-	resp, err := http.Get(url) //nolint:gosec,noctx
-	if err != nil {
-		return fmt.Errorf("download %s: %w", url, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
-	}
-	f, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
-}
-
-// extractZip extracts a zip archive to destDir with zip-slip protection.
-func extractZip(zipPath, destDir string) error {
-	r, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-
-	base := filepath.Clean(destDir) + string(os.PathSeparator)
-	for _, f := range r.File {
-		target := filepath.Join(destDir, filepath.FromSlash(f.Name))
-		if !strings.HasPrefix(target, base) {
-			return fmt.Errorf("zip slip: illegal path %s", f.Name)
-		}
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := extractZipEntry(f, target); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func extractZipEntry(f *zip.File, dest string) error {
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
-	}
-	rc, err := f.Open()
-	if err != nil {
-		return err
-	}
-	defer rc.Close()
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	_, err = io.Copy(out, rc) //nolint:gosec
-	return err
 }

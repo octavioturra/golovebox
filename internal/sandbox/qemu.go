@@ -2,12 +2,14 @@ package sandbox
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/user/golovebox/internal/config"
+	embedassets "github.com/user/golovebox/internal/embed"
 )
 
 type Manager struct {
@@ -21,18 +23,35 @@ func Start(cfg config.Config) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	qemuDir, err := cfg.QEMUDir()
+	if err != nil {
+		return nil, err
+	}
+
+	qemuExe := cfg.QEMUPath
+	if qemuExe == "" {
+		qemuExe = embedassets.QEMUExePath(qemuDir)
+	}
+
 	imgPath := filepath.Join(vmDir, "base.img")
 	qmpAddr := fmt.Sprintf("127.0.0.1:%d", cfg.QMPPort)
 
 	args := []string{
-		"-hda", imgPath,
+		"-drive", "file=" + imgPath + ",format=qcow2,if=virtio",
 		"-m", "2048",
 		"-nographic",
-		"-net", fmt.Sprintf("user,hostfwd=tcp::%d-:22", cfg.SSHPort),
+		"-netdev", fmt.Sprintf("user,id=net0,hostfwd=tcp::%d-:22", cfg.SSHPort),
+		"-device", "virtio-net-pci,netdev=net0",
 		"-qmp", fmt.Sprintf("tcp:%s,server,nowait", qmpAddr),
 	}
 
-	cmd := exec.Command(cfg.QEMUPath, args...)
+	// Pass firmware directory when using the embedded QEMU binary.
+	shareDir := filepath.Join(qemuDir, "share", "qemu")
+	if _, serr := os.Stat(shareDir); serr == nil {
+		args = append([]string{"-L", shareDir}, args...)
+	}
+
+	cmd := exec.Command(qemuExe, args...)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start qemu: %w", err)
 	}

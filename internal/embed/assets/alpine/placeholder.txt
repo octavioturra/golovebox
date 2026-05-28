@@ -1,0 +1,1 @@
+Run 'mage fetch' to populate this directory with the real Alpine ISO.
