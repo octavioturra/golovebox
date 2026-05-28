@@ -177,7 +177,7 @@ func step8Config(bd string, repair bool) (*config.Config, error) {
 
 	qemuExe := "qemu-system-x86_64"
 	if runtime.GOOS == "windows" {
-		qemuExe = filepath.Join("bin", qemuExe+".exe")
+		qemuExe += ".exe"
 	}
 	cfg.QEMUPath = filepath.Join(bd, "qemu", qemuExe)
 

@@ -83,19 +83,18 @@ func ExtractAlpineISO(destDir string) error {
 }
 
 // QEMUExePath returns the path to qemu-system-x86_64 in the given directory.
-// On Windows the MSYS2 package layout places executables under bin/.
+// The weilnetz.de NSIS installer extracts to a flat layout (no bin/ subdir).
 func QEMUExePath(qemuDir string) string {
 	if runtime.GOOS == "windows" {
-		return filepath.Join(qemuDir, "bin", "qemu-system-x86_64.exe")
+		return filepath.Join(qemuDir, "qemu-system-x86_64.exe")
 	}
 	return filepath.Join(qemuDir, "qemu-system-x86_64")
 }
 
 // QEMUImgPath returns the path to qemu-img in the given directory.
-// On Windows the MSYS2 package layout places executables under bin/.
 func QEMUImgPath(qemuDir string) string {
 	if runtime.GOOS == "windows" {
-		return filepath.Join(qemuDir, "bin", "qemu-img.exe")
+		return filepath.Join(qemuDir, "qemu-img.exe")
 	}
 	return filepath.Join(qemuDir, "qemu-img")
 }

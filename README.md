@@ -206,11 +206,11 @@ The build pipeline is managed by [Mage](https://magefile.org/). **Do not run `go
 
 ### Prerequisites
 
-- Go 1.22+
+- Go 1.22+, no C toolchain, `CGO_ENABLED=0`
 - Mage: `go install github.com/magefile/mage@latest`
-- GNU tar with zstd support (for Windows QEMU extraction)
-  - Linux: `tar --version` should show GNU tar 1.31+
-  - macOS: `brew install gnu-tar` if BSD tar doesn't support `--zstd`
+- macOS only: `brew install qemu` (for `mage fetchDarwin`)
+- Linux only: `apt install qemu-system-x86` (for `mage fetchLinux`)
+- 7-zip **is downloaded automatically** by `mage fetchWindows` — no manual install
 
 ### Build steps
 
@@ -218,61 +218,78 @@ The build pipeline is managed by [Mage](https://magefile.org/). **Do not run `go
 git clone https://github.com/octavioturra/golovebox
 cd golovebox
 
-# 1. Download QEMU binaries (Windows amd64) + Alpine Virt ISO
-#    Places assets in internal/embed/assets/ (~200 MB download)
-TARGET_OS=windows mage fetchWindows
-mage fetchAlpine
+# 1. Download QEMU + Alpine ISO (all assets go to internal/embed/assets/)
+#    7-zip standalone is fetched automatically to build/tools/
+mage fetch          # fetches for current host OS (or TARGET_OS=windows on Linux)
 
-# 2. Cross-compile for Windows (CGO_ENABLED=0, single binary)
-mage buildWindows
-# → build/golovebox.exe  (~300 MB with embedded assets)
+# For cross-compiling Windows binary from Linux:
+mage fetchWindows   # downloads weilnetz.de installer + extracts with 7-zip
+mage fetchAlpine    # downloads Alpine Virt ISO
 
-# For development on Linux (uses system QEMU, no embedding):
-mage build
-# → build/golovebox  (~14 MB, placeholder assets)
+# 2. Verify assets
+mage check
+# → checks: qemu-system-x86_64.exe present (>10 MB), DLL count >50,
+#   bios-256k.bin present, Alpine ISO present (>40 MB)
+
+# 3. Compile
+mage buildWindows   # CGO_ENABLED=0, GOOS=windows, → build/golovebox.exe (~300 MB)
+mage build          # current OS, → build/golovebox
 ```
 
 ### Available Mage targets
 
 | Target | Description |
 |---|---|
-| `mage fetch` | Download assets for the current host OS |
+| `mage fetch` | Download all assets for the current host OS |
 | `mage fetchAlpine` | Download only the Alpine Virt ISO |
-| `mage fetchWindows` | Download Windows amd64 QEMU from MSYS2 |
+| `mage fetchWindows` | Download Windows QEMU from qemu.weilnetz.de via 7-zip (auto-downloaded) |
+| `mage fetchLinux` | Copy Linux QEMU from system (`apt install qemu-system-x86` first) |
+| `mage fetchDarwin` | Copy macOS QEMU from Homebrew (`brew install qemu` first) |
 | `mage build` | Compile for current OS/arch |
 | `mage buildWindows` | Cross-compile for Windows amd64 |
-| `mage clean` | Remove downloaded assets (keeps placeholder.txt) |
-| `mage check` | Run `go vet ./...` |
+| `mage check` | Verify all embedded assets are present and correctly sized |
+| `mage clean` | Remove downloaded assets and scratch dirs (keeps `placeholder.txt`) |
 
 ### How the embedded assets work
 
 ```
-internal/embed/assets/
+internal/embed/assets/         ← go:embed source (gitignored except placeholder.txt)
 ├── alpine/
-│   ├── placeholder.txt        ← committed — lets go:embed compile
-│   └── alpine-virt-x86_64.iso ← added by "mage fetchAlpine" (gitignored)
+│   ├── placeholder.txt        ← committed — lets go:embed compile without real ISO
+│   └── alpine-virt-x86_64.iso ← populated by mage fetchAlpine
 └── qemu/
     ├── windows-amd64/
-    │   ├── placeholder.txt    ← committed
-    │   ├── bin/               ← added by "mage fetchWindows"
-    │   │   ├── qemu-system-x86_64.exe
-    │   │   ├── qemu-img.exe
-    │   │   └── *.dll
-    │   └── share/qemu/        ← firmware (bios-256k.bin, efi-virtio.rom…)
+    │   ├── placeholder.txt
+    │   ├── qemu-system-x86_64.exe  ← extracted from weilnetz.de NSIS installer
+    │   ├── qemu-img.exe
+    │   ├── *.dll                   ← ~100 DLLs, all needed at runtime
+    │   └── share/qemu/             ← firmware: bios-256k.bin, efi-virtio.rom…
     ├── linux-amd64/
     │   ├── placeholder.txt
-    │   └── qemu-system-x86_64 ← add manually from system package
+    │   └── qemu-system-x86_64      ← copied from system by mage fetchLinux
     └── darwin-arm64/
-        └── placeholder.txt
+        ├── placeholder.txt
+        └── qemu-system-x86_64      ← copied from Homebrew by mage fetchDarwin
+
+build/tools/                   ← 7-zip standalone (build-time only, gitignored)
+build/tmp/                     ← installer + extraction scratch (gitignored)
 ```
 
-Go's `//go:embed` picks up the entire directory tree at compile time. A **placeholder build** (just `go build` without assets) compiles cleanly — `golovebox init` will fail with a clear error message:
+**How `mage fetchWindows` works:**
+1. Downloads `7zr.exe` / `7za` (7-zip standalone, ~750 KB) to `build/tools/`
+2. Scrapes `qemu.weilnetz.de/w64/` to find the latest `qemu-w64-setup-YYYYMMDD.exe`
+3. Downloads the installer and verifies its SHA512
+4. Extracts the NSIS installer with 7-zip (no installation, no admin rights)
+5. Filters: keeps `qemu-system-x86_64.exe`, `qemu-img.exe`, all `*.dll`, `share/qemu/`
+6. Copies to `internal/embed/assets/qemu/windows-amd64/`
+
+A **placeholder build** (`go build` without assets) compiles cleanly — `golovebox init` will fail with a clear message:
 
 ```
 QEMU/Alpine assets not embedded: run 'mage fetch' before 'mage build'
 ```
 
-On Windows, `golovebox init` step 7 passes `-L .golovebox/qemu/share/qemu` to QEMU automatically so it finds the embedded firmware.
+`golovebox init` automatically passes `-L .golovebox/qemu/share/qemu` to QEMU so it finds the embedded firmware (BIOS, VirtIO ROMs) after extraction.
 
 ---
 
@@ -281,7 +298,8 @@ On Windows, `golovebox init` step 7 passes `-L .golovebox/qemu/share/qemu` to QE
 ### Unit / vet
 
 ```bash
-mage check        # go vet ./...
+mage check        # verify embedded assets (size, DLL count, firmware presence)
+go vet ./...      # static analysis (no VM needed)
 go test ./...     # run tests (no VM needed)
 ```
 
@@ -475,4 +493,5 @@ golovebox/
 | 3 | ✅ | Gateway — Telegram bot, SSH pool, GIT_ASKPASS, LLM retry |
 | 4 | ✅ | Platform — DAG orchestrator, web chat, skills, parallel execution |
 | 5 | ✅ | Self-contained — embedded QEMU + Alpine ISO, Mage build pipeline, automated init |
-| 6 | planned | Auth, HTTPS, multi-tenant, skill marketplace, streaming output |
+| 6 | ✅ | QEMU extraction fix — weilnetz.de official installer via 7-zip, SHA512 verify, flat layout |
+| 7 | planned | Auth, HTTPS, multi-tenant, skill marketplace, streaming output |
