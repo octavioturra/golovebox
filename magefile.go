@@ -481,26 +481,40 @@ func filterAndCopyQEMU(srcDir, destDir string) error {
 	return nil
 }
 
-// verifySHA512 downloads the .sha512 checksum file and checks it against filePath.
-// Non-fatal: logs a warning and continues if the checksum URL is unreachable.
+// verifySHA512 downloads the .sha512 checksum file and verifies filePath against it.
+// Non-fatal: if the checksum URL is unreachable or returns a non-200 status,
+// the check is skipped with a warning rather than aborting the fetch.
 func verifySHA512(filePath, sha512URL string) error {
 	resp, err := http.Get(sha512URL) //nolint:noctx
 	if err != nil {
-		fmt.Printf("[fetch] Warning: could not download SHA512 (%v), skipping check.\n", err)
+		fmt.Printf("[fetch] Warning: SHA512 unavailable (%v), skipping check.\n", err)
 		return nil
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("[fetch] Warning: SHA512 file returned HTTP %d, skipping check.\n", resp.StatusCode)
+		return nil
+	}
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
+
+	// Format is "<hash>  <filename>" or just "<hash>"; take the first field.
 	fields := strings.Fields(string(raw))
 	if len(fields) == 0 {
 		fmt.Println("[fetch] Warning: empty SHA512 file, skipping check.")
 		return nil
 	}
 	expected := strings.ToLower(fields[0])
+
+	// Sanity-check: SHA-512 hex digest is exactly 128 characters.
+	if len(expected) != 128 {
+		fmt.Printf("[fetch] Warning: unexpected SHA512 format (got %d chars, want 128), skipping check.\n", len(expected))
+		return nil
+	}
 
 	f, err := os.Open(filePath)
 	if err != nil {
