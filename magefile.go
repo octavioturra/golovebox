@@ -41,9 +41,12 @@ const (
 	weilnetzBase = "https://qemu.weilnetz.de/w64/"
 
 	// 7-zip standalone binaries (mage build-time tool, never embedded).
-	sz7rExeURL = "https://www.7-zip.org/a/7zr.exe"            // Windows — standalone, no deps
-	sz7zLinURL = "https://www.7-zip.org/a/7z2409-linux-x64.tar.xz" // Linux amd64
-	sz7zMacURL = "https://www.7-zip.org/a/7z2409-mac.tar.xz"       // macOS (universal)
+	// 7zr.exe supports only 7z/xz/lzma — not NSIS. We use it to bootstrap 7za.exe
+	// (from the extra package) which does support NSIS installers.
+	sz7rExeURL  = "https://www.7-zip.org/a/7zr.exe"                 // Windows — 7z format only
+	sz7zExtraURL = "https://www.7-zip.org/a/7z2409-extra.7z"        // contains x64/7za.exe (NSIS-capable)
+	sz7zLinURL  = "https://www.7-zip.org/a/7z2409-linux-x64.tar.xz" // Linux amd64
+	sz7zMacURL  = "https://www.7-zip.org/a/7z2409-mac.tar.xz"       // macOS (universal)
 
 	// Build-time directories (all gitignored).
 	toolsDir = "build/tools"
@@ -358,13 +361,34 @@ func fetch7za() (string, error) {
 
 	switch runtime.GOOS {
 	case "windows":
-		dest := filepath.Join(toolsDir, "7zr.exe")
+		// We need 7za.exe (NSIS-capable) to extract the QEMU installer.
+		// Bootstrap: download 7zr.exe (7z-only), use it to extract 7za.exe from the extra package.
+		dest := filepath.Join(toolsDir, "7za.exe")
 		if _, err := os.Stat(dest); err == nil {
 			return dest, nil
 		}
-		fmt.Println("[tools] Downloading 7zr.exe...")
-		if err := downloadFile(sz7rExeURL, dest); err != nil {
+		szrPath := filepath.Join(toolsDir, "7zr.exe")
+		if _, err := os.Stat(szrPath); err != nil {
+			fmt.Println("[tools] Downloading 7zr.exe (bootstrap)...")
+			if err := downloadFile(sz7rExeURL, szrPath); err != nil {
+				return "", err
+			}
+		}
+		extraPath := filepath.Join(toolsDir, "7z-extra.7z")
+		fmt.Println("[tools] Downloading 7z-extra.7z (contains 7za.exe)...")
+		if err := downloadFile(sz7zExtraURL, extraPath); err != nil {
 			return "", err
+		}
+		defer os.Remove(extraPath)
+		// Extract only x64/7za.exe from the archive.
+		cmd := exec.Command(szrPath, "e", "-y", "-o"+toolsDir, extraPath, "x64/7za.exe")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("extract 7za.exe: %w", err)
+		}
+		if _, err := os.Stat(dest); err != nil {
+			return "", fmt.Errorf("7za.exe not found after extraction")
 		}
 		return dest, nil
 
