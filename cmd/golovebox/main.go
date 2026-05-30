@@ -659,7 +659,7 @@ func newResumeCmd() *cobra.Command {
 // re-runs cloud-init from scratch. With --hard, removes the entire .golovebox/
 // directory (including config.toml and SSH keys).
 func newResetCmd() *cobra.Command {
-	var hard bool
+	var hard, yes bool
 	cmd := &cobra.Command{
 		Use:   "reset",
 		Short: "Reset VM state (delete base.img + cidata so next init rebuilds the VM)",
@@ -674,11 +674,30 @@ func newResetCmd() *cobra.Command {
 			}
 
 			if hard {
-				fmt.Printf("Removing %s entirely...\n", bd)
+				fmt.Printf("⚠  This will DELETE %s entirely:\n", bd)
+				fmt.Println("    - config.toml (LLM provider, API keys, GitHub token)")
+				fmt.Println("    - SSH keypair")
+				fmt.Println("    - VM disk, memory, logs, runs, skills")
+				if !yes && !confirm("Type 'yes' to confirm hard reset: ", "yes") {
+					fmt.Println("Aborted.")
+					return nil
+				}
+				fmt.Printf("Removing %s...\n", bd)
 				if err := os.RemoveAll(bd); err != nil {
 					return fmt.Errorf("hard reset: %w", err)
 				}
 				fmt.Println("Done. Run 'golovebox init' to start over.")
+				return nil
+			}
+
+			fmt.Println("This will delete the VM disk and cloud-init data:")
+			fmt.Println("    - vm/base.img            (the VM disk; ~164 MB, re-extracted from binary)")
+			fmt.Println("    - vm/cidata.iso          (cloud-init seed)")
+			fmt.Println("    - vm/.alpine-image-size  (idempotency marker)")
+			fmt.Println("    - vm/qemu.log, install.log")
+			fmt.Println("Config (config.toml) and SSH keys are PRESERVED.")
+			if !yes && !confirm("Proceed? [y/N]: ", "y", "yes") {
+				fmt.Println("Aborted.")
 				return nil
 			}
 
@@ -701,7 +720,25 @@ func newResetCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&hard, "hard", false, "remove the entire .golovebox/ directory (config, keys, everything)")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation prompt")
 	return cmd
+}
+
+// confirm prompts on stdin and returns true if the user's reply (trimmed,
+// lower-cased) matches any of the accepted answers.
+func confirm(prompt string, accept ...string) bool {
+	fmt.Print(prompt)
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return false
+	}
+	got := strings.ToLower(strings.TrimSpace(scanner.Text()))
+	for _, a := range accept {
+		if got == strings.ToLower(a) {
+			return true
+		}
+	}
+	return false
 }
 
 func truncate(s string, n int) string {

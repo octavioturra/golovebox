@@ -127,35 +127,69 @@ func step6CloudInit(vmDir, pubKey string) error {
 
 func step2Config(bd string, repair bool) (*config.Config, error) {
 	cf := filepath.Join(bd, "config.toml")
-	if repair {
-		if _, err := os.Stat(cf); err == nil {
-			fmt.Println("[init] Config already exists, skipping.")
-			return config.Load()
+	scanner := bufio.NewScanner(os.Stdin)
+
+	// If a config already exists, default to reusing it.
+	// --repair always reuses without asking.
+	if _, err := os.Stat(cf); err == nil {
+		existing, loadErr := config.Load()
+		if loadErr == nil {
+			if repair {
+				fmt.Println("[init] Config already exists (--repair), reusing.")
+				return existing, nil
+			}
+			fmt.Printf("[init] Found existing config at %s\n", cf)
+			fmt.Printf("       Provider: %s | Model: %s | Repo: %s\n",
+				existing.LLMProvider, existing.LLMModel, existing.DefaultRepo)
+			fmt.Print("       Reuse it? [Y/n]: ")
+			scanner.Scan()
+			ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
+			if ans == "" || ans == "y" || ans == "yes" {
+				return existing, nil
+			}
+			fmt.Println("[init] Re-running config wizard (press Enter to keep existing values shown in [brackets]).")
 		}
 	}
 
-	scanner := bufio.NewScanner(os.Stdin)
-	ask := func(label string) string {
-		fmt.Printf("%s: ", label)
+	// askWithDefault prints "label [default]: "; empty input falls back to default.
+	askWithDefault := func(label, def string) string {
+		if def != "" {
+			fmt.Printf("%s [%s]: ", label, def)
+		} else {
+			fmt.Printf("%s: ", label)
+		}
 		scanner.Scan()
-		return strings.TrimSpace(scanner.Text())
+		v := strings.TrimSpace(scanner.Text())
+		if v == "" {
+			return def
+		}
+		return v
 	}
 
-	cfg := &config.Config{
-		SSHPort: 2222,
-		QMPPort: 4444,
+	// Start from any existing config so unchanged fields are preserved.
+	cfg, _ := config.Load()
+	if cfg == nil {
+		cfg = &config.Config{}
 	}
-	cfg.LLMProvider = ask("LLM Provider (anthropic, openai, ollama, gemini)")
+	if cfg.SSHPort == 0 {
+		cfg.SSHPort = 2222
+	}
+	if cfg.QMPPort == 0 {
+		cfg.QMPPort = 4444
+	}
+
+	cfg.LLMProvider = askWithDefault("LLM Provider (anthropic, openai, ollama, gemini)", cfg.LLMProvider)
 	defaultURL := config.DefaultBaseURL(cfg.LLMProvider)
-	cfg.LLMBaseURL = ask(fmt.Sprintf("LLM Base URL (Enter for default: %s)", defaultURL))
-	if cfg.LLMBaseURL == "" {
-		cfg.LLMBaseURL = defaultURL
+	baseDefault := cfg.LLMBaseURL
+	if baseDefault == "" {
+		baseDefault = defaultURL
 	}
-	cfg.LLMModel = ask("LLM Model (e.g. claude-opus-4-5, gpt-4o, llama3)")
-	cfg.APIKey = ask("API Key")
-	cfg.GitHubToken = ask("GitHub Token")
-	cfg.TelegramToken = ask("Telegram Token (optional, Enter to skip)")
-	cfg.DefaultRepo = ask("Default GitHub repo (owner/repo, optional, Enter to skip)")
+	cfg.LLMBaseURL = askWithDefault("LLM Base URL", baseDefault)
+	cfg.LLMModel = askWithDefault("LLM Model (e.g. claude-opus-4-5, gpt-4o, llama3)", cfg.LLMModel)
+	cfg.APIKey = askWithDefault("API Key", cfg.APIKey)
+	cfg.GitHubToken = askWithDefault("GitHub Token", cfg.GitHubToken)
+	cfg.TelegramToken = askWithDefault("Telegram Token (optional)", cfg.TelegramToken)
+	cfg.DefaultRepo = askWithDefault("Default GitHub repo (owner/repo, optional)", cfg.DefaultRepo)
 
 	qemuExe := "qemu-system-x86_64"
 	if runtime.GOOS == "windows" {
