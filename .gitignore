@@ -14,6 +14,8 @@ internal/embed/assets/qemu/darwin-arm64/*
 internal/embed/assets/alpine/*
 !internal/embed/assets/alpine/placeholder.txt
 
+build/
+
 # Build-time scratch (7-zip tool, installer download, extraction temp).
 build/tools/
 build/tmp/

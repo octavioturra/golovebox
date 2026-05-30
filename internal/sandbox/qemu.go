@@ -13,9 +13,10 @@ import (
 )
 
 type Manager struct {
-	cmd *exec.Cmd
-	qmp *QMPClient
-	cfg config.Config
+	cmd     *exec.Cmd
+	qmp     *QMPClient
+	cfg     config.Config
+	logFile *os.File
 }
 
 func Start(cfg config.Config) (*Manager, error) {
@@ -51,8 +52,22 @@ func Start(cfg config.Config) (*Manager, error) {
 		args = append([]string{"-L", shareDir}, args...)
 	}
 
+	vmDir, err2 := cfg.VMDir()
+	if err2 != nil {
+		return nil, err2
+	}
+	logPath := filepath.Join(vmDir, "qemu.log")
+	logFile, err2 := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err2 != nil {
+		return nil, fmt.Errorf("open qemu log: %w", err2)
+	}
+
 	cmd := exec.Command(qemuExe, args...)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Stdin = nil
 	if err := cmd.Start(); err != nil {
+		logFile.Close()
 		return nil, fmt.Errorf("start qemu: %w", err)
 	}
 
@@ -64,7 +79,7 @@ func Start(cfg config.Config) (*Manager, error) {
 		return nil, fmt.Errorf("qmp connect: %w", err)
 	}
 
-	return &Manager{cmd: cmd, qmp: qmpClient, cfg: cfg}, nil
+	return &Manager{cmd: cmd, qmp: qmpClient, cfg: cfg, logFile: logFile}, nil
 }
 
 func (m *Manager) Stop() error {
@@ -73,7 +88,11 @@ func (m *Manager) Stop() error {
 			m.cmd.Process.Kill() //nolint:errcheck
 		}
 	}
-	return m.cmd.Wait()
+	err := m.cmd.Wait()
+	if m.logFile != nil {
+		m.logFile.Close()
+	}
+	return err
 }
 
 func (m *Manager) HealthCheck() error {

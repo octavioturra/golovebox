@@ -77,11 +77,22 @@ func RunInstallBoot(ctx context.Context, qemuDir, vmDir string) error {
 		"-no-reboot",
 	)
 
-	cmd := exec.CommandContext(ctx, qemuExe, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	logPath := filepath.Join(vmDir, "install.log")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return fmt.Errorf("install boot: create log: %w", err)
+	}
+	defer logFile.Close()
 
-	fmt.Println("[install] Booting Alpine for first-time configuration (≤10 min)...")
+	// Redirect serial console to the log file so it never touches the terminal.
+	args = append(args, "-serial", "file:"+logPath)
+
+	cmd := exec.CommandContext(ctx, qemuExe, args...)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Stdin = nil
+
+	fmt.Printf("[install] Booting Alpine for first-time configuration (≤10 min)... log: %s\n", logPath)
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("install boot: timed out after 10 minutes")
