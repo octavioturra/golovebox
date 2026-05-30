@@ -210,7 +210,7 @@ The build pipeline is managed by [Mage](https://magefile.org/). **Do not run `go
 - Mage: `go install github.com/magefile/mage@latest`
 - macOS only: `brew install qemu` (for `mage fetchDarwin`)
 - Linux only: `apt install qemu-system-x86` (for `mage fetchLinux`)
-- 7-zip **is downloaded automatically** by `mage fetchWindows` — no manual install
+- Windows only: no extra tools needed — `mage fetchWindows` runs the QEMU installer silently
 
 ### Build steps
 
@@ -219,11 +219,10 @@ git clone https://github.com/octavioturra/golovebox
 cd golovebox
 
 # 1. Download QEMU + Alpine ISO (all assets go to internal/embed/assets/)
-#    7-zip standalone is fetched automatically to build/tools/
-mage fetch          # fetches for current host OS (or TARGET_OS=windows on Linux)
+mage fetch          # fetches for current host OS
 
 # For cross-compiling Windows binary from Linux:
-mage fetchWindows   # downloads weilnetz.de installer + extracts with 7-zip
+mage fetchWindows   # downloads weilnetz.de installer, runs it silently, filters files
 mage fetchAlpine    # downloads Alpine Virt ISO
 
 # 2. Verify assets
@@ -242,7 +241,7 @@ mage build          # current OS, → build/golovebox
 |---|---|
 | `mage fetch` | Download all assets for the current host OS |
 | `mage fetchAlpine` | Download only the Alpine Virt ISO |
-| `mage fetchWindows` | Download Windows QEMU from qemu.weilnetz.de via 7-zip (auto-downloaded) |
+| `mage fetchWindows` | Download Windows QEMU from qemu.weilnetz.de via silent NSIS install (no UAC) |
 | `mage fetchLinux` | Copy Linux QEMU from system (`apt install qemu-system-x86` first) |
 | `mage fetchDarwin` | Copy macOS QEMU from Homebrew (`brew install qemu` first) |
 | `mage build` | Compile for current OS/arch |
@@ -271,17 +270,15 @@ internal/embed/assets/         ← go:embed source (gitignored except placeholde
         ├── placeholder.txt
         └── qemu-system-x86_64      ← copied from Homebrew by mage fetchDarwin
 
-build/tools/                   ← 7-zip standalone (build-time only, gitignored)
-build/tmp/                     ← installer + extraction scratch (gitignored)
+build/tmp/                     ← installer + silent-install scratch (gitignored)
 ```
 
 **How `mage fetchWindows` works:**
-1. Downloads `7zr.exe` / `7za` (7-zip standalone, ~750 KB) to `build/tools/`
-2. Scrapes `qemu.weilnetz.de/w64/` to find the latest `qemu-w64-setup-YYYYMMDD.exe`
-3. Downloads the installer and verifies its SHA512
-4. Extracts the NSIS installer with 7-zip (no installation, no admin rights)
-5. Filters: keeps `qemu-system-x86_64.exe`, `qemu-img.exe`, all `*.dll`, `share/qemu/`
-6. Copies to `internal/embed/assets/qemu/windows-amd64/`
+1. Scrapes `qemu.weilnetz.de/w64/` to find the latest `qemu-w64-setup-YYYYMMDD.exe`
+2. Downloads the installer and verifies its SHA512
+3. Runs `installer.exe /S /D=<build/tmp/qemu-raw>` with `__COMPAT_LAYER=RunAsInvoker` (no UAC, no admin rights)
+4. Filters: keeps `qemu-system-x86_64.exe`, `qemu-img.exe`, all `*.dll`, `share/qemu/`
+5. Copies to `internal/embed/assets/qemu/windows-amd64/`
 
 A **placeholder build** (`go build` without assets) compiles cleanly — `golovebox init` will fail with a clear message:
 
@@ -493,5 +490,5 @@ golovebox/
 | 3 | ✅ | Gateway — Telegram bot, SSH pool, GIT_ASKPASS, LLM retry |
 | 4 | ✅ | Platform — DAG orchestrator, web chat, skills, parallel execution |
 | 5 | ✅ | Self-contained — embedded QEMU + Alpine ISO, Mage build pipeline, automated init |
-| 6 | ✅ | QEMU extraction fix — weilnetz.de official installer via 7-zip, SHA512 verify, flat layout |
+| 6 | ✅ | QEMU extraction fix — weilnetz.de official installer, silent NSIS install, SHA512 verify, flat layout |
 | 7 | planned | Auth, HTTPS, multi-tenant, skill marketplace, streaming output |
