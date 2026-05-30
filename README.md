@@ -7,7 +7,7 @@ golovebox init   →   extracts QEMU, installs Alpine VM, generates SSH keys, co
 golovebox web    →   opens localhost:8080
 ```
 
-> **Self-contained since Phase 5**: QEMU binaries and Alpine ISO are embedded inside the binary at build time. No manual downloads. No prerequisites beyond the binary itself.
+> **Self-contained since Phase 5**: QEMU binaries and a ready-to-boot Alpine cloud image are embedded inside the binary at build time. No manual downloads. No prerequisites beyond the binary itself.
 
 ---
 
@@ -44,25 +44,32 @@ Every `shell`, `read_file`, `write_file` call runs inside an **Alpine Linux QEMU
 golovebox init
 ```
 
-This runs a fully automated 9-step setup:
+This runs a fully automated 7-step setup:
 
 | Step | What happens |
 |---|---|
 | 1 | Create `.golovebox/` directory tree |
-| 2 | Extract embedded QEMU binaries to `.golovebox/qemu/` |
-| 3 | Extract embedded Alpine Virt ISO to `.golovebox/vm/` |
-| 4 | Generate RSA 4096 SSH key pair in `.golovebox/vm/` |
-| 5 | Create 8 GB qcow2 disk image (base.img) |
-| 6 | Build cloud-init CIDATA ISO with SSH key |
-| 7 | Boot Alpine from ISO — VM installs itself and powers off (up to 10 min) |
-| 8 | Interactive wizard: LLM provider, API keys, GitHub token |
-| 9 | Smoke test: start VM, SSH in, `echo ok` |
+| 2 | Interactive wizard: LLM provider, API keys, GitHub token (reuses existing `config.toml` if present — just press Enter) |
+| 3 | Extract embedded QEMU binaries to `.golovebox/qemu/` |
+| 4 | Extract embedded Alpine cloud qcow2 to `.golovebox/vm/base.img` (already a bootable Alpine install — no separate install step needed) |
+| 5 | Generate RSA 4096 SSH key pair in `.golovebox/vm/` |
+| 6 | Build cloud-init CIDATA disk with SSH key + sshd config |
+| 7 | Boot VM — cloud-init applies SSH key and starts sshd on first boot; host SSHs in to run `echo ok` |
 
-All steps are idempotent — safe to re-run. To redo only incomplete steps:
+All steps are idempotent — safe to re-run. To redo only incomplete steps and skip the config wizard:
 
 ```
 golovebox init --repair
 ```
+
+If you ever need to wipe the VM and re-run cloud-init from scratch (e.g. after changing the cloud-init template):
+
+```
+golovebox reset            # delete base.img + cidata; keep config + SSH keys
+golovebox reset --hard     # delete everything (config, keys, VM)
+```
+
+Both prompt for confirmation; add `-y` to skip the prompt.
 
 ### 2. Open the web UI
 
@@ -73,7 +80,8 @@ golovebox web
 Boots the VM, starts a server on `localhost:8080`, and opens the browser automatically.
 
 ```
-golovebox web --addr :9090   # custom port
+golovebox web --addr :9090       # custom port
+golovebox web --timeout 30       # increase VM start timeout (default 15s)
 ```
 
 The UI has two panels:
@@ -223,15 +231,15 @@ mage fetch          # fetches for current host OS
 
 # For cross-compiling Windows binary from Linux:
 mage fetchWindows   # downloads weilnetz.de installer, runs it silently, filters files
-mage fetchAlpine    # downloads Alpine Virt ISO
+mage fetchAlpine    # downloads Alpine NoCloud qcow2 (~164 MB)
 
 # 2. Verify assets
 mage check
 # → checks: qemu-system-x86_64.exe present (>10 MB), DLL count >50,
-#   bios-256k.bin present, Alpine ISO present (>40 MB)
+#   bios-256k.bin present, Alpine cloud qcow2 present (>40 MB)
 
 # 3. Compile
-mage buildWindows   # CGO_ENABLED=0, GOOS=windows, → build/golovebox.exe (~300 MB)
+mage buildWindows   # CGO_ENABLED=0, GOOS=windows, → build/golovebox.exe (~450 MB)
 mage build          # current OS, → build/golovebox
 ```
 
@@ -240,7 +248,7 @@ mage build          # current OS, → build/golovebox
 | Target | Description |
 |---|---|
 | `mage fetch` | Download all assets for the current host OS |
-| `mage fetchAlpine` | Download only the Alpine Virt ISO |
+| `mage fetchAlpine` | Download only the Alpine NoCloud cloud qcow2 |
 | `mage fetchWindows` | Download Windows QEMU from qemu.weilnetz.de via silent NSIS install (no UAC) |
 | `mage fetchLinux` | Copy Linux QEMU from system (`apt install qemu-system-x86` first) |
 | `mage fetchDarwin` | Copy macOS QEMU from Homebrew (`brew install qemu` first) |
@@ -252,25 +260,25 @@ mage build          # current OS, → build/golovebox
 ### How the embedded assets work
 
 ```
-internal/embed/assets/         ← go:embed source (gitignored except placeholder.txt)
+internal/embed/assets/             ← go:embed source (gitignored except placeholder.txt)
 ├── alpine/
-│   ├── placeholder.txt        ← committed — lets go:embed compile without real ISO
-│   └── alpine-virt-x86_64.iso ← populated by mage fetchAlpine
+│   ├── placeholder.txt            ← committed — lets go:embed compile without real image
+│   └── alpine-cloud-x86_64.qcow2  ← populated by mage fetchAlpine (~164 MB, bootable Alpine)
 └── qemu/
     ├── windows-amd64/
     │   ├── placeholder.txt
-    │   ├── qemu-system-x86_64.exe  ← extracted from weilnetz.de NSIS installer
+    │   ├── qemu-system-x86_64.exe ← extracted from weilnetz.de NSIS installer
     │   ├── qemu-img.exe
-    │   ├── *.dll                   ← ~100 DLLs, all needed at runtime
-    │   └── share/qemu/             ← firmware: bios-256k.bin, efi-virtio.rom…
+    │   ├── *.dll                  ← ~100 DLLs, all needed at runtime
+    │   └── share/qemu/            ← firmware: bios-256k.bin, efi-virtio.rom…
     ├── linux-amd64/
     │   ├── placeholder.txt
-    │   └── qemu-system-x86_64      ← copied from system by mage fetchLinux
+    │   └── qemu-system-x86_64     ← copied from system by mage fetchLinux
     └── darwin-arm64/
         ├── placeholder.txt
-        └── qemu-system-x86_64      ← copied from Homebrew by mage fetchDarwin
+        └── qemu-system-x86_64     ← copied from Homebrew by mage fetchDarwin
 
-build/tmp/                     ← installer + silent-install scratch (gitignored)
+build/tmp/                         ← installer + silent-install scratch (gitignored)
 ```
 
 **How `mage fetchWindows` works:**
@@ -286,7 +294,11 @@ A **placeholder build** (`go build` without assets) compiles cleanly — `golove
 QEMU/Alpine assets not embedded: run 'mage fetch' before 'mage build'
 ```
 
-`golovebox init` automatically passes `-L .golovebox/qemu/share/qemu` to QEMU so it finds the embedded firmware (BIOS, VirtIO ROMs) after extraction.
+`sandbox.Start()` automatically passes `-L .golovebox/qemu/share/qemu` to QEMU so it finds the embedded firmware (BIOS, VirtIO ROMs) after extraction, and validates the qcow2 magic of `base.img` before booting — so stale/empty disks fail with a clear error instead of SeaBIOS's generic "could not read boot disk".
+
+### Why Alpine NoCloud instead of the Virt ISO
+
+Earlier phases used `alpine-virt-*.iso` (the Alpine live installer) and attempted to drive a first-boot install via cloud-init. That ISO does not ship cloud-init enabled on the boot path — it stops at `localhost login:` waiting for `setup-alpine`. Phase 7 switched to the **Alpine NoCloud cloud image** (`nocloud_alpine-*-x86_64-bios-cloudinit-r0.qcow2`), which is a ready-to-boot Alpine install with cloud-init wired into OpenRC. The CIDATA disk is detected on first boot and applied; no install step is needed.
 
 ---
 
@@ -372,32 +384,32 @@ Everything lives in `.golovebox/` next to the binary — never in system paths:
 ```
 .golovebox/
 ├── config.toml
-├── qemu/                     ← extracted at init (embedded in binary)
-│   ├── bin/
-│   │   ├── qemu-system-x86_64.exe
-│   │   ├── qemu-img.exe
-│   │   └── *.dll
-│   └── share/qemu/           ← BIOS firmware, VirtIO ROMs
+├── qemu/                        ← extracted at init (embedded in binary)
+│   ├── qemu-system-x86_64.exe   ← flat layout (Windows: weilnetz.de installer)
+│   ├── qemu-img.exe
+│   ├── *.dll                    ← ~100 DLLs on Windows
+│   └── share/qemu/              ← BIOS firmware, VirtIO ROMs
 ├── vm/
-│   ├── alpine-virt-x86_64.iso ← extracted at init
-│   ├── cidata.iso             ← cloud-init CIDATA (generated at init)
-│   ├── base.img               ← 8 GB qcow2, Alpine installed here
-│   ├── id_rsa                 ← SSH private key (generated at init)
-│   └── id_rsa.pub
-├── memory/                   ← chromem-go vector embeddings
+│   ├── base.img                 ← Alpine cloud qcow2, extracted from embed
+│   ├── .alpine-image-size       ← idempotency marker for base.img
+│   ├── cidata.iso               ← cloud-init NoCloud seed (generated at init)
+│   ├── id_rsa                   ← SSH private key (generated at init)
+│   ├── id_rsa.pub
+│   └── qemu.log                 ← QEMU stdout/stderr (serial console of the VM)
+├── memory/                      ← chromem-go vector embeddings
 ├── logs/
-├── skills/                   ← reusable skill .md files
+├── skills/                      ← reusable skill .md files
 │   └── go_api_review.md
 └── runs/
     └── run-20250601-a3f9c2/
-        ├── dag.json           ← full DAG plan
-        ├── node_states.json   ← live state snapshot
-        ├── specs/             ← copy of uploaded spec files
+        ├── dag.json             ← full DAG plan
+        ├── node_states.json     ← live state snapshot
+        ├── specs/               ← copy of uploaded spec files
         ├── logs/
         │   └── node-1.log
         ├── artifacts/
-        │   └── tech_debt.md   ← NOT_TODO items
-        └── run_summary.md     ← generated on completion
+        │   └── tech_debt.md     ← NOT_TODO items
+        └── run_summary.md       ← generated on completion
 ```
 
 ---
@@ -405,19 +417,20 @@ Everything lives in `.golovebox/` next to the binary — never in system paths:
 ## CLI reference
 
 ```
-golovebox init [--repair]              Initialize environment (automated, ~10 min first run)
-golovebox web [--addr :8080]          Start web UI (primary interface)
+golovebox init [--repair]                  Initialize environment (cloud-init runs ~2 min on first boot)
+golovebox reset [--hard] [-y]              Reset VM (--hard removes everything; -y skips confirmation)
+golovebox web [--addr :8080] [--timeout]   Start web UI (primary interface)
 
-golovebox run <dir-or-file>           Execute specs through DAG orchestrator
-golovebox resume <run-id>             Resume an interrupted run
-golovebox status [run-id]             VM/config status, or details of a run
+golovebox run <dir-or-file>                Execute specs through DAG orchestrator
+golovebox resume <run-id>                  Resume an interrupted run
+golovebox status [run-id]                  VM/config status, or details of a run
 
-golovebox skill list                  List available skills
-golovebox skill generate "<desc>"     Generate a skill via LLM
+golovebox skill list                       List available skills
+golovebox skill generate "<desc>"          Generate a skill via LLM
 
-golovebox github --repo o/r --issue N Resolve a GitHub issue (one-shot)
-golovebox exec "<cmd>"                Execute a shell command in the VM
-golovebox daemon                      Telegram bot gateway (secondary interface)
+golovebox github --repo o/r --issue N      Resolve a GitHub issue (one-shot)
+golovebox exec "<cmd>"                     Execute a shell command in the VM
+golovebox daemon                           Telegram bot gateway (secondary interface)
 ```
 
 ---
@@ -462,12 +475,12 @@ golovebox/
     ├── config/                 Portable paths (relative to executable)
     ├── dag/                    DAG, Executor (parallel), CheckpointManager
     ├── dsl/                    Keyword parser for spec .md files
-    ├── embed/                  Embedded QEMU + Alpine ISO assets
+    ├── embed/                  Embedded QEMU + Alpine cloud qcow2 assets
     │   ├── assets/             Populated by "mage fetch" (gitignored)
-    │   ├── extract.go          ExtractQEMU, ExtractAlpineISO
+    │   ├── extract.go          ExtractQEMU, ExtractAlpineImage (writes base.img)
     │   ├── keygen.go           RSA 4096 SSH keypair generation
-    │   ├── cloudinit.go        cloud-init CIDATA ISO builder
-    │   └── installboot.go      First-boot Alpine installer via QEMU
+    │   ├── cloudinit.go        cloud-init NoCloud CIDATA ISO builder (user-data + sshd drop-in)
+    │   └── installboot.go      no-op stubs (cloud image is already installed)
     ├── gateway/                Handler interface, Gateway, TelegramHandler
     ├── llm/                    HTTP client (OpenAI-compat + Anthropic, retry)
     ├── memory/                 chromem-go vector store + embeddings
@@ -489,6 +502,7 @@ golovebox/
 | 2 | ✅ | Agent — ReAct loop, LLM client, GitHub tools, vector memory |
 | 3 | ✅ | Gateway — Telegram bot, SSH pool, GIT_ASKPASS, LLM retry |
 | 4 | ✅ | Platform — DAG orchestrator, web chat, skills, parallel execution |
-| 5 | ✅ | Self-contained — embedded QEMU + Alpine ISO, Mage build pipeline, automated init |
+| 5 | ✅ | Self-contained — embedded QEMU + Alpine assets, Mage build pipeline, automated init |
 | 6 | ✅ | QEMU extraction fix — weilnetz.de official installer, silent NSIS install, SHA512 verify, flat layout |
-| 7 | planned | Auth, HTTPS, multi-tenant, skill marketplace, streaming output |
+| 7 | ✅ | Alpine NoCloud cloud image + reset command + config reuse on re-init + silent QEMU boot |
+| 8 | planned | Auth, HTTPS, multi-tenant, skill marketplace, streaming output |
