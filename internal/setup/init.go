@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/spf13/cobra"
 	embedassets "github.com/user/golovebox/internal/embed"
@@ -40,31 +43,28 @@ func runInit(ctx context.Context, repair bool) error {
 	if err := step1Dirs(bd); err != nil {
 		return fmt.Errorf("step 1 (dirs): %w", err)
 	}
-	if err := step2ExtractQEMU(qemuDir); err != nil {
-		return fmt.Errorf("step 2 (qemu): %w", err)
-	}
-	if err := step3ExtractAlpine(vmDir); err != nil {
-		return fmt.Errorf("step 3 (alpine): %w", err)
-	}
-	pubKey, err := step4SSHKeypair(vmDir)
+	// Run interactive config NOW — before any heavy work. This way the user
+	// never loses prior input if a later step fails, and config.toml is on
+	// disk as early as possible.
+	cfg, err := step2Config(bd, repair)
 	if err != nil {
-		return fmt.Errorf("step 4 (keygen): %w", err)
+		return fmt.Errorf("step 2 (config): %w", err)
 	}
-	if err := step5CreateDisk(qemuDir, vmDir); err != nil {
-		return fmt.Errorf("step 5 (disk): %w", err)
+	if err := step3ExtractQEMU(qemuDir); err != nil {
+		return fmt.Errorf("step 3 (qemu): %w", err)
+	}
+	if err := step4ExtractAlpine(vmDir); err != nil {
+		return fmt.Errorf("step 4 (alpine image): %w", err)
+	}
+	pubKey, err := step5SSHKeypair(vmDir)
+	if err != nil {
+		return fmt.Errorf("step 5 (keygen): %w", err)
 	}
 	if err := step6CloudInit(vmDir, pubKey); err != nil {
 		return fmt.Errorf("step 6 (cloud-init): %w", err)
 	}
-	if err := step7InstallBoot(ctx, qemuDir, vmDir); err != nil {
-		return fmt.Errorf("step 7 (install): %w", err)
-	}
-	cfg, err := step8Config(bd, repair)
-	if err != nil {
-		return fmt.Errorf("step 8 (config): %w", err)
-	}
-	if err := step9SmokeTest(cfg); err != nil {
-		return fmt.Errorf("step 9 (smoke test): %w", err)
+	if err := step7SmokeTest(ctx, cfg); err != nil {
+		return fmt.Errorf("step 7 (smoke test): %w", err)
 	}
 	return nil
 }
@@ -87,7 +87,7 @@ func step1Dirs(bd string) error {
 	return nil
 }
 
-func step2ExtractQEMU(qemuDir string) error {
+func step3ExtractQEMU(qemuDir string) error {
 	fmt.Println("[init] Extracting QEMU binaries...")
 	if err := embedassets.ExtractQEMU(qemuDir); err != nil {
 		return err
@@ -96,16 +96,16 @@ func step2ExtractQEMU(qemuDir string) error {
 	return nil
 }
 
-func step3ExtractAlpine(vmDir string) error {
-	fmt.Println("[init] Extracting Alpine ISO...")
-	if err := embedassets.ExtractAlpineISO(vmDir); err != nil {
+func step4ExtractAlpine(vmDir string) error {
+	fmt.Println("[init] Extracting Alpine cloud image → base.img...")
+	if err := embedassets.ExtractAlpineImage(vmDir); err != nil {
 		return err
 	}
-	fmt.Println("[init] Alpine ISO ready.")
+	fmt.Println("[init] Alpine base.img ready.")
 	return nil
 }
 
-func step4SSHKeypair(vmDir string) (string, error) {
+func step5SSHKeypair(vmDir string) (string, error) {
 	fmt.Println("[init] Generating SSH keypair...")
 	pubKey, err := embedassets.GenerateSSHKeypair(vmDir)
 	if err != nil {
@@ -113,15 +113,6 @@ func step4SSHKeypair(vmDir string) (string, error) {
 	}
 	fmt.Println("[init] SSH keypair ready.")
 	return pubKey, nil
-}
-
-func step5CreateDisk(qemuDir, vmDir string) error {
-	fmt.Println("[init] Creating VM disk image...")
-	if err := embedassets.CreateDisk(qemuDir, vmDir); err != nil {
-		return err
-	}
-	fmt.Println("[init] Disk image ready.")
-	return nil
 }
 
 func step6CloudInit(vmDir, pubKey string) error {
@@ -134,16 +125,7 @@ func step6CloudInit(vmDir, pubKey string) error {
 	return nil
 }
 
-func step7InstallBoot(ctx context.Context, qemuDir, vmDir string) error {
-	fmt.Println("[init] Running first-boot Alpine install (up to 10 min)...")
-	if err := embedassets.RunInstallBoot(ctx, qemuDir, vmDir); err != nil {
-		return err
-	}
-	fmt.Println("[init] Alpine installed.")
-	return nil
-}
-
-func step8Config(bd string, repair bool) (*config.Config, error) {
+func step2Config(bd string, repair bool) (*config.Config, error) {
 	cf := filepath.Join(bd, "config.toml")
 	if repair {
 		if _, err := os.Stat(cf); err == nil {
@@ -188,23 +170,42 @@ func step8Config(bd string, repair bool) (*config.Config, error) {
 	return cfg, nil
 }
 
-func step9SmokeTest(cfg *config.Config) error {
-	fmt.Println("[init] Running smoke test...")
+func step7SmokeTest(ctx context.Context, cfg *config.Config) error {
+	fmt.Println("[init] Booting VM (cloud-init runs on first boot — may take 2-4 min)...")
 	vmDir, err := cfg.VMDir()
 	if err != nil {
 		return err
 	}
 	sshKeyPath := filepath.Join(vmDir, "id_rsa")
 
+	// Cloud-init takes longer than QMP — give QEMU plenty of time to bind QMP.
+	sandbox.StartTimeout = 60 * time.Second
 	mgr, err := sandbox.Start(*cfg)
 	if err != nil {
 		return fmt.Errorf("start VM: %w", err)
 	}
 	defer mgr.Stop() //nolint:errcheck
 
-	client, err := sandbox.Dial("127.0.0.1", fmt.Sprintf("%d", cfg.SSHPort), "root", sshKeyPath)
-	if err != nil {
-		return fmt.Errorf("ssh dial: %w", err)
+	// Poll SSH for up to 5 minutes — cloud-init needs to install packages
+	// and start sshd on the first boot.
+	deadline := time.Now().Add(5 * time.Minute)
+	var client *ssh.Client
+	var lastErr error
+	for time.Now().Before(deadline) {
+		client, lastErr = sandbox.Dial("127.0.0.1", fmt.Sprintf("%d", cfg.SSHPort), "root", sshKeyPath)
+		if lastErr == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+		fmt.Print(".")
+	}
+	fmt.Println()
+	if client == nil {
+		return fmt.Errorf("ssh dial timed out after 5 min: %w", lastErr)
 	}
 	defer client.Close()
 

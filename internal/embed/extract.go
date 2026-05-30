@@ -50,36 +50,66 @@ func ExtractQEMU(destDir string) error {
 	})
 }
 
-// ExtractAlpineISO writes the embedded Alpine ISO to destDir/alpine-virt-x86_64.iso.
-// Idempotent: skips if the file already exists with the correct size.
-func ExtractAlpineISO(destDir string) error {
+// ExtractAlpineImage writes the embedded Alpine cloud qcow2 directly to
+// destDir/base.img. The cloud image is already a ready-to-boot Alpine install
+// with cloud-init enabled — no separate "install boot" step is required.
+//
+// Idempotency is driven by a marker file (.alpine-image-size) holding the
+// embedded image's size in bytes. This avoids stale base.img files left over
+// from earlier installs (e.g. the empty 8GB qcow2 created by older flows)
+// silently surviving and causing "could not read the boot disk" at boot time.
+func ExtractAlpineImage(destDir string) error {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("extract alpine: mkdir: %w", err)
 	}
 
-	destPath := filepath.Join(destDir, alpineISOName)
+	destPath := filepath.Join(destDir, "base.img")
+	markerPath := filepath.Join(destDir, ".alpine-image-size")
 
-	data, err := ReadAlpineISO()
+	data, err := ReadAlpineImage()
 	if err != nil {
-		// File might be placeholder.txt — check size to distinguish
+		return ErrAssetsNotFetched
+	}
+	if strings.Contains(string(data[:min(len(data), 256)]), "mage fetch") {
 		return ErrAssetsNotFetched
 	}
 
-	// Check if it's just the placeholder.
-	if strings.Contains(string(data), "mage fetch") {
-		return ErrAssetsNotFetched
+	// qcow2 magic check: protect against embedding a wrong/corrupt file.
+	if !(len(data) >= 4 && data[0] == 'Q' && data[1] == 'F' && data[2] == 'I' && data[3] == 0xfb) {
+		return fmt.Errorf("extract alpine: embedded image is not a qcow2 (magic mismatch) — re-run 'mage fetchAlpine'")
 	}
 
-	// Idempotency: skip if destination has the same size.
-	if fi, err := os.Stat(destPath); err == nil && fi.Size() == int64(len(data)) {
-		return nil
+	wantSize := fmt.Sprintf("%d", len(data))
+
+	// Skip only if BOTH marker and base.img exist AND the marker matches.
+	if markerData, err := os.ReadFile(markerPath); err == nil {
+		if strings.TrimSpace(string(markerData)) == wantSize {
+			if _, err := os.Stat(destPath); err == nil {
+				return nil
+			}
+		}
 	}
 
+	// Force a clean overwrite: remove any stale base.img from previous installs.
+	_ = os.Remove(destPath)
+	_ = os.Remove(markerPath)
+
+	fmt.Printf("[extract] writing base.img (%.1f MB)...\n", float64(len(data))/(1<<20))
 	tmp := destPath + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("extract alpine: write: %w", err)
 	}
-	return os.Rename(tmp, destPath)
+	if err := os.Rename(tmp, destPath); err != nil {
+		return err
+	}
+	return os.WriteFile(markerPath, []byte(wantSize), 0o644)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // QEMUExePath returns the path to qemu-system-x86_64 in the given directory.

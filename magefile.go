@@ -33,9 +33,11 @@ import (
 // — constants ——————————————————————————————————————————————————————————————
 
 const (
-	// Alpine Virt ISO (x86_64, minimal, cloud-init capable).
-	alpineISOURL  = "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-virt-3.21.3-x86_64.iso"
-	alpineISODest = "internal/embed/assets/alpine/alpine-virt-x86_64.iso"
+	// Alpine NoCloud cloud image (x86_64, BIOS, cloud-init pre-enabled).
+	// Unlike the live ISO, this is a ready-to-boot qcow2 with Alpine already
+	// installed and cloud-init configured to apply CIDATA on first boot.
+	alpineISOURL  = "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.7-x86_64-bios-cloudinit-r0.qcow2"
+	alpineISODest = "internal/embed/assets/alpine/alpine-cloud-x86_64.qcow2"
 
 	// Official QEMU Windows builds from Stefan Weil.
 	weilnetzBase = "https://qemu.weilnetz.de/w64/"
@@ -69,13 +71,13 @@ func Fetch() error {
 	return nil
 }
 
-// FetchAlpine downloads the Alpine Virt x86_64 ISO into the embed asset directory.
+// FetchAlpine downloads the Alpine cloud qcow2 image into the embed asset directory.
 func FetchAlpine() error {
 	if fi, err := os.Stat(alpineISODest); err == nil && fi.Size() > 10<<20 {
-		fmt.Println("[fetch] Alpine ISO already present, skipping.")
+		fmt.Println("[fetch] Alpine cloud image already present, skipping.")
 		return nil
 	}
-	fmt.Println("[fetch] Downloading Alpine Virt ISO...")
+	fmt.Println("[fetch] Downloading Alpine NoCloud qcow2...")
 	return downloadFile(alpineISOURL, alpineISODest)
 }
 

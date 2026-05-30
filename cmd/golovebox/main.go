@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -41,6 +42,7 @@ func main() {
 	root.AddCommand(newWebCmd())
 	root.AddCommand(newSkillCmd())
 	root.AddCommand(newResumeCmd())
+	root.AddCommand(newResetCmd())
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		os.Exit(1)
 	}
@@ -417,6 +419,7 @@ func newRunCmd() *cobra.Command {
 // newWebCmd starts the web server and opens the browser.
 func newWebCmd() *cobra.Command {
 	var addrFlag string
+	var timeoutFlag int
 	cmd := &cobra.Command{
 		Use:   "web",
 		Short: "Start the web chat server and open browser",
@@ -427,6 +430,10 @@ func newWebCmd() *cobra.Command {
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("config: %w", err)
+			}
+
+			if timeoutFlag > 0 {
+				sandbox.StartTimeout = time.Duration(timeoutFlag) * time.Second
 			}
 
 			fmt.Println("Starting VM...")
@@ -491,6 +498,7 @@ func newWebCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&addrFlag, "addr", ":8080", "HTTP listen address")
+	cmd.Flags().IntVar(&timeoutFlag, "timeout", 0, "VM start timeout in seconds (default 15)")
 	return cmd
 }
 
@@ -645,6 +653,55 @@ func newResumeCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// newResetCmd wipes VM state so the next `init` re-extracts base.img and
+// re-runs cloud-init from scratch. With --hard, removes the entire .golovebox/
+// directory (including config.toml and SSH keys).
+func newResetCmd() *cobra.Command {
+	var hard bool
+	cmd := &cobra.Command{
+		Use:   "reset",
+		Short: "Reset VM state (delete base.img + cidata so next init rebuilds the VM)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			bd, err := config.BaseDir()
+			if err != nil {
+				return err
+			}
+			if _, err := os.Stat(bd); os.IsNotExist(err) {
+				fmt.Printf("Nothing to reset — %s does not exist.\n", bd)
+				return nil
+			}
+
+			if hard {
+				fmt.Printf("Removing %s entirely...\n", bd)
+				if err := os.RemoveAll(bd); err != nil {
+					return fmt.Errorf("hard reset: %w", err)
+				}
+				fmt.Println("Done. Run 'golovebox init' to start over.")
+				return nil
+			}
+
+			// Soft reset: drop everything that ties the VM to its prior first boot.
+			vmDir := filepath.Join(bd, "vm")
+			targets := []string{
+				filepath.Join(vmDir, "base.img"),
+				filepath.Join(vmDir, ".alpine-image-size"),
+				filepath.Join(vmDir, "cidata.iso"),
+				filepath.Join(vmDir, "qemu.log"),
+				filepath.Join(vmDir, "install.log"),
+			}
+			for _, p := range targets {
+				if err := os.Remove(p); err == nil {
+					fmt.Printf("  removed %s\n", p)
+				}
+			}
+			fmt.Println("VM reset. Run 'golovebox init' to rebuild base.img and re-run cloud-init.")
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&hard, "hard", false, "remove the entire .golovebox/ directory (config, keys, everything)")
+	return cmd
 }
 
 func truncate(s string, n int) string {

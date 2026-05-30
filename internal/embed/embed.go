@@ -9,12 +9,12 @@ import "embed"
 //go:embed assets/alpine
 var alpineAssets embed.FS
 
-const alpineISOName = "alpine-virt-x86_64.iso"
+// AlpineImageName is the embedded cloud image file (qcow2, ready-to-boot).
+const AlpineImageName = "alpine-cloud-x86_64.qcow2"
 
-// ReadAlpineISO returns the embedded Alpine ISO bytes.
-// Returns an error if the placeholder file is present instead of the real ISO
-// (i.e., "mage fetch" has not been run).
-func ReadAlpineISO() ([]byte, error) {
-	path := "assets/alpine/" + alpineISOName
+// ReadAlpineImage returns the embedded Alpine cloud qcow2 bytes.
+// Returns ErrAssetsNotFetched if only the placeholder is present.
+func ReadAlpineImage() ([]byte, error) {
+	path := "assets/alpine/" + AlpineImageName
 	return alpineAssets.ReadFile(path)
 }
