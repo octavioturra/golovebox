@@ -33,7 +33,7 @@ Parameters:
 
 // ProgressFunc is called after each tool execution to report loop progress.
 // Nil is accepted — callers that don't need progress updates pass nil.
-type ProgressFunc func(iteration int, action, observation string)
+type ProgressFunc func(iteration int, action, params, observation string)
 
 type Loop struct {
 	llm      *llm.Client
@@ -96,13 +96,33 @@ func (l *Loop) Run(ctx context.Context, task string, progress ProgressFunc) (str
 			if len(obs) > 120 {
 				obs = obs[:120] + "..."
 			}
-			progress(i+1, action, obs)
+			progress(i+1, action, formatParams(params), obs)
 		}
 
 		messages = appendObservation(messages, reply, observation)
 	}
 
 	return "", fmt.Errorf("agent: reached max iterations (%d) without completing task", MaxIterations)
+}
+
+// formatParams formats a params map into a human-readable string for display.
+func formatParams(params map[string]string) string {
+	// Prioritise common keys so the most useful value appears first.
+	priority := []string{"cmd", "path", "query", "number", "head", "title", "content"}
+	seen := make(map[string]bool)
+	var parts []string
+	for _, k := range priority {
+		if v, ok := params[k]; ok {
+			parts = append(parts, fmt.Sprintf("%s: %s", k, v))
+			seen[k] = true
+		}
+	}
+	for k, v := range params {
+		if !seen[k] {
+			parts = append(parts, fmt.Sprintf("%s: %s", k, v))
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func appendObservation(messages []llm.Message, reply, observation string) []llm.Message {

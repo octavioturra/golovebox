@@ -112,6 +112,7 @@ Rules:
 - NOT_TODO items must NOT appear as nodes
 - Nodes that are independent of each other must NOT have dependencies between them (they run in parallel)
 - Each node needs a clear, actionable "task" string describing exactly what the agent should do
+- Each node "id" MUST be snake_case and describe the action performed (e.g. "create_auth_handler", "run_unit_tests", "open_pull_request"). NEVER use generic names like "step-1", "step-2", "task-1", "node-1".
 
 Return ONLY a JSON array, no markdown fences, no explanation:
 [{"id":"string","type":"task|checkpoint|gate|notify|wait_event|try_else","task":"string","dependencies":["id",...],"annotation":"string (optional)"}]

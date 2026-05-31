@@ -82,6 +82,7 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 	mux.HandleFunc("POST /api/skills/generate", s.handleGenerateSkill)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/runs/{id}/nodes/{nodeID}/log", s.handleNodeLog)
+	mux.HandleFunc("POST /api/runs/{id}/stop", s.handleStop)
 
 	srv := &http.Server{Addr: addr, Handler: mux}
 
@@ -170,6 +171,9 @@ func (s *Server) startRunFromTask(w http.ResponseWriter, ctx context.Context, ta
 		http.Error(w, "create run: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Persist the task text for display purposes.
+	_ = os.WriteFile(filepath.Join(s.store.RunDir(runID), "task.txt"), []byte(task), 0o644)
+
 	// Wrap free-form task as a minimal spec file so the orchestrator can plan it.
 	content := "# Task\n\n" + task + "\n"
 	_ = s.store.SaveSpec(runID, "task.md", []byte(content))
@@ -188,20 +192,27 @@ func (s *Server) launchSingleTask(w http.ResponseWriter, ctx context.Context, ru
 	nodeID := "task-0"
 	nodelog := s.store.NodeLogFor(runID, nodeID)
 
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.store.RegisterRun(runID, cancel)
+
 	s.mu.Lock()
 	s.activeRuns[runID] = nil
 	s.mu.Unlock()
 
 	go func() {
-		_, _ = s.gw.RunSpecTask(context.Background(), task, func(iter int, action, obs string) {
-			nodelog.Append(iter, action, obs)
-			s.broadcastNodeLog(runID, nodeID, NodeLogEntry{iter, action, obs, time.Now()})
+		defer func() {
+			cancel()
+			s.store.UnregisterRun(runID)
+			s.mu.Lock()
+			delete(s.activeRuns, runID)
+			s.mu.Unlock()
+		}()
+		_, _ = s.gw.RunSpecTask(runCtx, task, func(iter int, action, params, obs string) {
+			nodelog.Append(iter, action, params, obs)
+			s.broadcastNodeLog(runID, nodeID, NodeLogEntry{iter, action, params, obs, time.Now()})
 			_ = appendFile(filepath.Join(runDir, "logs", nodeID+".log"),
 				fmt.Sprintf("[%d] %s: %s\n", iter, action, obs))
 		})
-		s.mu.Lock()
-		delete(s.activeRuns, runID)
-		s.mu.Unlock()
 	}()
 
 	writeJSON(w, map[string]string{"run_id": runID})
@@ -215,6 +226,9 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 		return
 	}
 
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.store.RegisterRun(runID, cancel)
+
 	s.mu.Lock()
 	s.activeRuns[runID] = d
 	s.mu.Unlock()
@@ -227,19 +241,23 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 	dispatch := func(dCtx context.Context, node *dag.Node) (string, error) {
 		nodelog := s.store.NodeLogFor(runID, node.ID)
 		logPath := filepath.Join(runDir, "logs", node.ID+".log")
-		return s.gw.RunSpecTask(dCtx, node.Task, func(iter int, action, obs string) {
-			nodelog.Append(iter, action, obs)
-			s.broadcastNodeLog(runID, node.ID, NodeLogEntry{iter, action, obs, time.Now()})
+		return s.gw.RunSpecTask(dCtx, node.Task, func(iter int, action, params, obs string) {
+			nodelog.Append(iter, action, params, obs)
+			s.broadcastNodeLog(runID, node.ID, NodeLogEntry{iter, action, params, obs, time.Now()})
 			_ = appendFile(logPath, fmt.Sprintf("[%d] %s: %s\n", iter, action, obs))
 		})
 	}
 
 	exec := dag.NewExecutor(d, dag.ExecutorConfig{}, dispatch, notify, s.checkpoint, runDir)
 	go func() {
-		_ = exec.Run(context.Background())
-		s.mu.Lock()
-		delete(s.activeRuns, runID)
-		s.mu.Unlock()
+		defer func() {
+			cancel()
+			s.store.UnregisterRun(runID)
+			s.mu.Lock()
+			delete(s.activeRuns, runID)
+			s.mu.Unlock()
+		}()
+		_ = exec.Run(runCtx)
 	}()
 
 	writeJSON(w, map[string]string{"run_id": runID})
@@ -269,6 +287,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"dag":         json.RawMessage(dagJSON),
 		"node_states": nodeStates,
+		"task":        s.store.ReadTask(runID),
 	})
 }
 
@@ -311,6 +330,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
+	runID := r.PathValue("id")
+	ok := s.store.CancelRun(runID)
+	writeJSON(w, map[string]bool{"ok": ok})
 }
 
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
@@ -401,6 +426,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// healthHTTP is a shared HTTP client for health checks — 4s timeout, respects context.
+var healthHTTP = &http.Client{Timeout: 4 * time.Second}
+
 func (s *Server) healthVM(ctx context.Context) healthResult {
 	out, err := s.gw.HealthCheckVM(ctx)
 	if err != nil {
@@ -426,12 +454,12 @@ func (s *Server) healthLLM(ctx context.Context) healthResult {
 	req.Header.Set("x-api-key", s.cfg.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 	t0 := time.Now()
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := healthHTTP.Do(req)
 	if err != nil {
 		return healthResult{false, err.Error()}
 	}
 	resp.Body.Close()
-	if resp.StatusCode >= 400 && resp.StatusCode != 400 {
+	if resp.StatusCode >= 500 {
 		return healthResult{false, fmt.Sprintf("HTTP %d", resp.StatusCode)}
 	}
 	return healthResult{true, fmt.Sprintf("%s respondeu em %dms", s.cfg.LLMModel, time.Since(t0).Milliseconds())}
@@ -447,7 +475,7 @@ func (s *Server) healthGitHub(ctx context.Context) healthResult {
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.GitHubToken)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := healthHTTP.Do(req)
 	if err != nil {
 		return healthResult{false, err.Error()}
 	}
@@ -473,7 +501,7 @@ func (s *Server) healthRepo(ctx context.Context) healthResult {
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.GitHubToken)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := healthHTTP.Do(req)
 	if err != nil {
 		return healthResult{false, err.Error()}
 	}
@@ -487,31 +515,7 @@ func (s *Server) healthRepo(ctx context.Context) healthResult {
 func (s *Server) handleNodeLog(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 	nodeID := r.PathValue("nodeID")
-
-	// Try in-memory buffer first; fall back to disk for historical runs.
-	key := runID + "/" + nodeID
-	s.store.logsMu.Lock()
-	nl, exists := s.store.nodeLogs[key]
-	s.store.logsMu.Unlock()
-
-	if exists {
-		entries := nl.Entries()
-		if entries == nil {
-			entries = []NodeLogEntry{}
-		}
-		writeJSON(w, entries)
-		return
-	}
-
-	// Not in memory — read from disk (.jsonl).
-	entries, err := loadNodeLogFromDisk(nodeID, s.store.RunDir(runID))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if entries == nil {
-		entries = []NodeLogEntry{}
-	}
+	entries := s.store.GetNodeLog(runID, nodeID)
 	writeJSON(w, entries)
 }
 
@@ -536,6 +540,7 @@ func (s *Server) broadcastNodeLog(runID, nodeID string, entry NodeLogEntry) {
 		"node_id": nodeID,
 		"iter":    entry.Iteration,
 		"action":  entry.Action,
+		"params":  entry.Params,
 		"obs":     entry.Observation,
 		"ts":      entry.Timestamp,
 	})

@@ -369,7 +369,7 @@ func newRunCmd() *cobra.Command {
 				fmt.Printf("[%-14s] %s\n", node.State, node.ID)
 			}
 			dispatch := func(dCtx context.Context, node *dag.Node) (string, error) {
-				return gw.RunSpecTask(dCtx, node.Task, func(iter int, action, obs string) {
+				return gw.RunSpecTask(dCtx, node.Task, func(iter int, action, _, obs string) {
 					fmt.Printf("  [%d] %s: %s\n", iter, action, truncate(obs, 80))
 				})
 			}
@@ -638,7 +638,7 @@ func newResumeCmd() *cobra.Command {
 			runDir := store.RunDir(runID)
 
 			dispatch := func(dCtx context.Context, node *dag.Node) (string, error) {
-				return gw.RunSpecTask(dCtx, node.Task, func(iter int, action, obs string) {
+				return gw.RunSpecTask(dCtx, node.Task, func(iter int, action, _, obs string) {
 					fmt.Printf("  [%d] %s: %s\n", iter, action, truncate(obs, 80))
 				})
 			}

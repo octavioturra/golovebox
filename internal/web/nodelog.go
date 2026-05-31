@@ -14,6 +14,7 @@ import (
 type NodeLogEntry struct {
 	Iteration   int       `json:"iter"`
 	Action      string    `json:"action"`
+	Params      string    `json:"params"`
 	Observation string    `json:"obs"`
 	Timestamp   time.Time `json:"ts"`
 }
@@ -32,10 +33,11 @@ func newNodeLog(nodeID, runDir string) *NodeLog {
 }
 
 // Append records a new iteration, updates the in-memory slice, and appends to disk.
-func (nl *NodeLog) Append(iter int, action, obs string) {
+func (nl *NodeLog) Append(iter int, action, params, obs string) {
 	entry := NodeLogEntry{
 		Iteration:   iter,
 		Action:      action,
+		Params:      params,
 		Observation: obs,
 		Timestamp:   time.Now(),
 	}
