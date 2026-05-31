@@ -39,16 +39,18 @@ type sseClient struct {
 
 // Server is the embedded HTTP server for web chat and DAG visualisation.
 type Server struct {
-	gw         *gateway.Gateway
-	orch       *orchestrator.Orchestrator
-	checkpoint *dag.CheckpointManager
-	skillsReg  *skills.Registry
-	llmClient  *llm.Client
-	store      *RunStore
-	cfg        *config.Config
-	mu         sync.RWMutex
-	sseClients map[string][]*sseClient
-	activeRuns map[string]*dag.DAG
+	gw              *gateway.Gateway
+	orch            *orchestrator.Orchestrator
+	checkpoint      *dag.CheckpointManager
+	skillsReg       *skills.Registry
+	llmClient       *llm.Client
+	store           *RunStore
+	cfg             *config.Config
+	mu              sync.RWMutex
+	sseClients      map[string][]*sseClient
+	activeRuns      map[string]*dag.DAG
+	vmBootMu        sync.Mutex
+	vmBootStartedAt time.Time // time of first health check that saw vm.ok=false; zeroed when vm.ok=true
 }
 
 // New creates the Server wiring all components together.
@@ -481,8 +483,9 @@ func (s *Server) handleGenerateSkill(w http.ResponseWriter, r *http.Request) {
 // ── New handlers ──────────────────────────────────────────────────────────────
 
 type healthResult struct {
-	OK  bool   `json:"ok"`
-	Msg string `json:"msg"`
+	OK              bool   `json:"ok"`
+	Msg             string `json:"msg"`
+	BootElapsedSecs int    `json:"boot_elapsed_secs,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -516,6 +519,22 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		r := <-ch
 		out[r.key] = r.res
 	}
+
+	// Track VM boot duration so the UI can show "VM 0:23 ..." while warming up.
+	now := time.Now()
+	vm := out["vm"]
+	s.vmBootMu.Lock()
+	switch {
+	case vm.OK:
+		s.vmBootStartedAt = time.Time{}
+	case s.vmBootStartedAt.IsZero():
+		s.vmBootStartedAt = now
+	default:
+		vm.BootElapsedSecs = int(now.Sub(s.vmBootStartedAt).Seconds())
+		out["vm"] = vm
+	}
+	s.vmBootMu.Unlock()
+
 	writeJSON(w, out)
 }
 
@@ -525,14 +544,14 @@ var healthHTTP = &http.Client{Timeout: 4 * time.Second}
 func (s *Server) healthVM(ctx context.Context) healthResult {
 	out, err := s.gw.HealthCheckVM(ctx)
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
-	return healthResult{true, out}
+	return healthResult{OK: true, Msg:out}
 }
 
 func (s *Server) healthLLM(ctx context.Context) healthResult {
 	if s.cfg.LLMBaseURL == "" {
-		return healthResult{false, "LLMBaseURL não configurado"}
+		return healthResult{OK: false, Msg:"LLMBaseURL não configurado"}
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"model":      s.cfg.LLMModel,
@@ -541,7 +560,7 @@ func (s *Server) healthLLM(ctx context.Context) healthResult {
 	})
 	req, err := http.NewRequestWithContext(ctx, "POST", s.cfg.LLMBaseURL+"/v1/messages", bytes.NewReader(payload))
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", s.cfg.APIKey)
@@ -549,60 +568,60 @@ func (s *Server) healthLLM(ctx context.Context) healthResult {
 	t0 := time.Now()
 	resp, err := healthHTTP.Do(req)
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
 	resp.Body.Close()
 	if resp.StatusCode >= 500 {
-		return healthResult{false, fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		return healthResult{OK: false, Msg:fmt.Sprintf("HTTP %d", resp.StatusCode)}
 	}
-	return healthResult{true, fmt.Sprintf("%s respondeu em %dms", s.cfg.LLMModel, time.Since(t0).Milliseconds())}
+	return healthResult{OK: true, Msg:fmt.Sprintf("%s respondeu em %dms", s.cfg.LLMModel, time.Since(t0).Milliseconds())}
 }
 
 func (s *Server) healthGitHub(ctx context.Context) healthResult {
 	if s.cfg.GitHubToken == "" {
-		return healthResult{false, "GitHubToken não configurado"}
+		return healthResult{OK: false, Msg:"GitHubToken não configurado"}
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/user", nil)
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.GitHubToken)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := healthHTTP.Do(req)
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return healthResult{false, fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		return healthResult{OK: false, Msg:fmt.Sprintf("HTTP %d", resp.StatusCode)}
 	}
 	var u struct {
 		Login string `json:"login"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&u)
-	return healthResult{true, "autenticado como " + u.Login}
+	return healthResult{OK: true, Msg:"autenticado como " + u.Login}
 }
 
 func (s *Server) healthRepo(ctx context.Context) healthResult {
 	if s.cfg.DefaultRepo == "" {
-		return healthResult{true, "DefaultRepo não configurado (ok)"}
+		return healthResult{OK: true, Msg:"DefaultRepo não configurado (ok)"}
 	}
 	url := "https://api.github.com/repos/" + s.cfg.DefaultRepo
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.GitHubToken)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := healthHTTP.Do(req)
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return healthResult{false, fmt.Sprintf("%s: HTTP %d", s.cfg.DefaultRepo, resp.StatusCode)}
+		return healthResult{OK: false, Msg:fmt.Sprintf("%s: HTTP %d", s.cfg.DefaultRepo, resp.StatusCode)}
 	}
-	return healthResult{true, s.cfg.DefaultRepo + ": acessível"}
+	return healthResult{OK: true, Msg:s.cfg.DefaultRepo + ": acessível"}
 }
 
 func (s *Server) handleNodeLog(w http.ResponseWriter, r *http.Request) {

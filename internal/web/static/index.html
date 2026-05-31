@@ -13,7 +13,9 @@ body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:10
 /* Chat */
 #chat{width:380px;min-width:280px;display:flex;flex-direction:column;border-right:1px solid #1e293b;background:#1e293b}
 #chat-header{padding:12px 16px;border-bottom:1px solid #334155;display:flex;align-items:center;gap:8px}
-#chat-header h1{font-size:1rem;font-weight:600;color:#f8fafc}
+#chat-header h1{font-size:1rem;font-weight:600;color:#f8fafc;flex:1}
+.chat-clear{background:none;border:none;color:#64748b;cursor:pointer;font-size:0.85rem;padding:2px 6px;border-radius:4px}
+.chat-clear:hover{color:#e2e8f0;background:#334155}
 .status-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;flex-shrink:0}
 .status-dot.red{background:#ef4444}
 /* Health */
@@ -22,6 +24,7 @@ body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:10
 .h-dot{font-size:1rem;line-height:1;color:#9ca3af;transition:color .2s}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 .h-dot.checking{animation:pulse 1s infinite}
+.vm-timer{font-family:monospace;font-size:0.7rem;color:#fbbf24;margin-left:2px}
 #health-refresh{margin-left:auto;background:none;border:none;color:#64748b;cursor:pointer;font-size:0.8rem;padding:2px 4px;border-radius:4px}
 #health-refresh:hover{color:#e2e8f0;background:#334155}
 /* Messages */
@@ -71,7 +74,9 @@ body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:10
 #dag-panel{flex:1;display:flex;flex-direction:column;overflow:hidden;position:relative}
 #dag-header{padding:10px 16px;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:8px;font-size:0.8rem;color:#94a3b8}
 #run-label{font-weight:600;color:#e2e8f0}
-.stop-btn{margin-left:auto;padding:4px 10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:6px;cursor:pointer;font-size:0.75rem}
+.dag-relayout{margin-left:auto;padding:4px 10px;background:transparent;color:#64748b;border:1px solid #334155;border-radius:6px;cursor:pointer;font-size:0.7rem}
+.dag-relayout:hover{color:#e2e8f0;border-color:#475569;background:#1e293b}
+.stop-btn{margin-left:8px;padding:4px 10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:6px;cursor:pointer;font-size:0.75rem}
 .stop-btn:hover{background:#991b1b}
 #dag-canvas{flex:1;width:100%;min-height:0;background:#0a0f1e}
 #canvas-tooltip{position:fixed;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:0.75rem;color:#e2e8f0;pointer-events:none;display:none;z-index:50;max-width:260px;word-break:break-all;white-space:pre-wrap}
@@ -168,8 +173,9 @@ document.addEventListener('alpine:init', () => {
   // ── healthPanel ──────────────────────────────────────────
   Alpine.data('healthPanel', () => ({
     loading: false,
+    _vmWasOk: false,
     checks: {
-      vm:     { ok: null, msg: '' },
+      vm:     { ok: null, msg: '', boot_elapsed_secs: 0 },
       llm:    { ok: null, msg: '' },
       github: { ok: null, msg: '' },
       repo:   { ok: null, msg: '' },
@@ -179,10 +185,16 @@ document.addEventListener('alpine:init', () => {
       try {
         const data = await fetch('/api/health').then(r => r.json());
         this.checks = data;
+        const vmOkNow = !!(data.vm && data.vm.ok);
+        if (vmOkNow && !this._vmWasOk) {
+          window.dispatchEvent(new CustomEvent('vm-ready'));
+        }
+        this._vmWasOk = vmOkNow;
       } catch(e) {
         ['vm','llm','github','repo'].forEach(k => {
           this.checks[k] = { ok: false, msg: 'erro: ' + e.message };
         });
+        this._vmWasOk = false;
       } finally {
         this.loading = false;
       }
@@ -190,6 +202,14 @@ document.addEventListener('alpine:init', () => {
     color(key) {
       if (this.loading || this.checks[key].ok === null) return '#9ca3af';
       return this.checks[key].ok ? '#34d399' : '#f87171';
+    },
+    vmTimer() {
+      const v = this.checks.vm;
+      if (!v || v.ok || !v.boot_elapsed_secs) return '';
+      const s = v.boot_elapsed_secs;
+      const m = Math.floor(s / 60);
+      const r = String(s % 60).padStart(2, '0');
+      return `${m}:${r}`;
     },
     init() {
       this.check();
@@ -213,10 +233,24 @@ document.addEventListener('alpine:init', () => {
       let html = '';
       try { html = marked.parse(String(text || '')); } catch(_) { html = String(text || ''); }
       this.messages.push({ id: Date.now() + Math.random(), html, type, detail });
+      if (this.messages.length > 200) {
+        this.messages = this.messages.slice(-200);
+      }
+      this._persist();
       this.$nextTick(() => {
         const el = this.$refs.log;
         if (el) el.scrollTop = el.scrollHeight;
       });
+    },
+
+    _persist() {
+      try { localStorage.setItem('glb_chat', JSON.stringify(this.messages)); } catch(_) {}
+    },
+
+    clearChat() {
+      this.messages = [];
+      try { localStorage.removeItem('glb_chat'); } catch(_) {}
+      this.addMsg('Chat limpo.');
     },
 
     handleDrop(e) {
@@ -318,7 +352,19 @@ document.addEventListener('alpine:init', () => {
         Alpine.store('session').connOk = r.ok;
       } catch(_) { Alpine.store('session').connOk = false; }
 
-      this.addMsg('Bem-vindo ao golovebox. Faça upload de arquivos .md ou digite uma tarefa para iniciar.');
+      try {
+        const saved = localStorage.getItem('glb_chat');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length) {
+            this.messages = parsed.slice(-200);
+          }
+        }
+      } catch(_) {}
+
+      if (!this.messages.length) {
+        this.addMsg('Bem-vindo ao golovebox. Faça upload de arquivos .md ou digite uma tarefa para iniciar.');
+      }
 
       const savedRunId = localStorage.getItem('glb_run_id');
       if (savedRunId) {
@@ -337,11 +383,28 @@ document.addEventListener('alpine:init', () => {
   // ── runList ──────────────────────────────────────────────
   Alpine.data('runList', () => ({
     runs: [],
+    _reloadTimer: null,
     async load() {
       try {
         const data = await fetch('/api/runs').then(r => r.json());
         this.runs = data || [];
       } catch(_) {}
+    },
+    onStateChange(data) {
+      const state = data && data.state;
+      if (!state) return;
+      const activeId = Alpine.store('session').runId;
+      // Update inline first (cheap)
+      if (activeId) {
+        const run = this.runs.find(r => r.id === activeId);
+        if (run) {
+          if (state === 'error') run.state = 'error';
+          else if ((state === 'running' || state === 'pending') && run.state !== 'error') run.state = 'running';
+        }
+      }
+      // Debounce a refetch so terminal states (done/error) sync with backend infer.
+      if (this._reloadTimer) clearTimeout(this._reloadTimer);
+      this._reloadTimer = setTimeout(() => { this._reloadTimer = null; this.load(); }, 600);
     },
     select(runId) {
       window.dispatchEvent(new CustomEvent('run-selected', { detail: { runId } }));
@@ -486,7 +549,7 @@ document.addEventListener('alpine:init', () => {
       const container = document.getElementById('terminal-container');
       this.term.open(container);
       this.fitAddon.fit();
-      this._connect();
+      this._waitForVMAndConnect();
       this.term.onData((data) => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN)
           this.ws.send(data);
@@ -499,6 +562,25 @@ document.addEventListener('alpine:init', () => {
           this.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
       });
       this._resizeObs.observe(container);
+    },
+
+    async _waitForVMAndConnect() {
+      // Avoid the "conectado→desconectado" flicker by waiting for the VM to be
+      // healthy before opening the WebSocket. Healthcheck polling (5s) will
+      // also dispatch a 'vm-ready' event we listen for.
+      this.term.write('\x1b[33m● aguardando VM...\x1b[0m\r\n');
+      const probe = async () => {
+        try {
+          const data = await fetch('/api/health').then(r => r.json());
+          return !!(data && data.vm && data.vm.ok);
+        } catch(_) { return false; }
+      };
+      if (await probe()) { this._connect(); return; }
+      const onReady = () => {
+        window.removeEventListener('vm-ready', onReady);
+        this._connect();
+      };
+      window.addEventListener('vm-ready', onReady);
     },
 
     _connect() {
@@ -618,6 +700,7 @@ document.addEventListener('alpine:init', () => {
     <div id="chat-header">
       <div class="status-dot" :class="{red: !$store.session.connOk}"></div>
       <h1>golovebox</h1>
+      <button class="chat-clear" @click="clearChat()" title="Limpar histórico do chat">✕</button>
     </div>
 
     <!-- Health -->
@@ -630,6 +713,7 @@ document.addEventListener('alpine:init', () => {
                 :title="checks[key] ? checks[key].msg : ''"
                 >●</span>
           <span x-text="key.toUpperCase()"></span>
+          <span x-show="key === 'vm' && vmTimer()" class="vm-timer" x-text="vmTimer()"></span>
         </div>
       </template>
       <button id="health-refresh" @click="check()" title="Verificar health">↻</button>
@@ -679,7 +763,8 @@ document.addEventListener('alpine:init', () => {
     <div id="runs-panel"
          x-data="runList"
          @run-started.window="load()"
-         @run-selected.window="load()">
+         @run-selected.window="load()"
+         @sse-state-change.window="onStateChange($event.detail)">
       <h2>Runs anteriores</h2>
       <div id="runs-list">
         <template x-for="r in runs" :key="r.id">
@@ -703,6 +788,10 @@ document.addEventListener('alpine:init', () => {
     <div id="dag-header">
       <span>DAG</span>
       <span id="run-label" x-text="$store.session.runId || ''" x-data></span>
+      <button class="dag-relayout"
+              x-data
+              @click="window.relayoutDAG && window.relayoutDAG()"
+              title="Reorganizar (limpa posições salvas deste run)">↻ reorganizar</button>
       <button class="stop-btn"
               x-show="$store.session.running"
               x-cloak
@@ -903,15 +992,47 @@ const cy = cytoscape({
   boxSelectionEnabled: false,
 });
 
+function positionsKey(runId) { return 'glb_positions_' + (runId || 'unknown'); }
+
+function loadSavedPositions(runId) {
+  try {
+    const raw = localStorage.getItem(positionsKey(runId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object') ? parsed : null;
+  } catch(_) { return null; }
+}
+
+function savePositions() {
+  if (!currentRunId) return;
+  const map = {};
+  cy.nodes().forEach(n => {
+    const p = n.position();
+    map[n.id()] = { x: p.x, y: p.y };
+  });
+  try { localStorage.setItem(positionsKey(currentRunId), JSON.stringify(map)); } catch(_) {}
+}
+
+function clearSavedPositions(runId) {
+  try { localStorage.removeItem(positionsKey(runId)); } catch(_) {}
+}
+
+function relayoutDAG() {
+  clearSavedPositions(currentRunId);
+  cy.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 80, rankSep: 120 }).run();
+  cy.fit(cy.elements(), 40);
+}
+
 function loadDAG(dagData) {
   cy.elements().remove();
   if (!dagData || !dagData.nodes) return;
   const dagStore = Alpine.store('dag');
+  const saved = loadSavedPositions(currentRunId);
 
   Object.entries(dagData.nodes || {}).forEach(([id, n]) => {
     const ns    = dagStore.nodes[id] || {};
     const state = ns.state || n.state || 'pending';
-    cy.add({
+    const addOpts = {
       group: 'nodes',
       data: {
         id,
@@ -923,7 +1044,11 @@ function loadDAG(dagData) {
         task:       n.task || '',
         error:      ns.error || '',
       },
-    });
+    };
+    if (saved && saved[id] && typeof saved[id].x === 'number' && typeof saved[id].y === 'number') {
+      addOpts.position = { x: saved[id].x, y: saved[id].y };
+    }
+    cy.add(addOpts);
     if (state === 'waiting_human') cy.getElementById(id).addClass('waiting_human');
   });
 
@@ -931,8 +1056,26 @@ function loadDAG(dagData) {
     cy.add({ group: 'edges', data: { id: `e${i}`, source: from, target: to } });
   });
 
-  cy.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 40, rankSep: 60 }).run();
-  cy.fit(cy.elements(), 30);
+  // Identify nodes whose position was not restored from localStorage.
+  const missing = cy.nodes().filter(n => {
+    const p = n.position();
+    return !p || (p.x === 0 && p.y === 0);
+  });
+
+  if (missing.length === cy.nodes().length) {
+    // No saved positions at all → full dagre layout, then center.
+    cy.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 80, rankSep: 120 }).run();
+    cy.fit(cy.elements(), 40);
+    cy.center();
+  } else if (missing.length > 0) {
+    // Partial: lay out just the missing ones with dagre on the whole graph for
+    // consistency, but keep saved positions as anchors via 'preset' fallback.
+    cy.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 80, rankSep: 120 }).run();
+    cy.fit(cy.elements(), 40);
+  } else {
+    // Everything restored — just fit the camera.
+    cy.fit(cy.elements(), 40);
+  }
 }
 
 function updateNodeState(id, state, error) {
@@ -982,6 +1125,8 @@ cy.on('mouseover', 'node', e => {
 });
 
 cy.on('mouseout', 'node', () => { tooltip.style.display = 'none'; });
+
+cy.on('dragfree', 'node', () => savePositions());
 
 // ── selectRunGlobal ────────────────────────────────────────
 async function selectRunGlobal(runId) {

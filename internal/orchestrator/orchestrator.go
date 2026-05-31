@@ -143,7 +143,181 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 		}
 	}
 
+	enforceWorkflowOrdering(d, specs)
+
 	return d, nil
+}
+
+// enforceWorkflowOrdering guarantees that when a spec contains NEW BRANCH / PUSH / PR
+// annotations, the DAG ends up with the correct workflow node types AND the right
+// dependency chain: sync_repo → branch → edits (parallel) → push → pr.
+//
+// This is defensive — the LLM is instructed to do this via the prompt, but it
+// frequently emits generic `task` nodes named "push_…" or "open_pull_request" with
+// missing dependencies. Without this pass the agent loop runs inside those nodes and
+// confuses base/head, causing PR 422 errors and files created outside the branch.
+func enforceWorkflowOrdering(d *dag.DAG, specs []*dsl.ParsedSpec) {
+	// Detect required workflow nodes from spec annotations.
+	hasBranchKw, hasPushKw, hasPRKw := false, false, false
+	branchName, prTitle := "", ""
+	for _, s := range specs {
+		for _, a := range s.Annotations {
+			switch a.Keyword {
+			case dsl.KwNewBranch:
+				hasBranchKw = true
+				if branchName == "" {
+					branchName = a.Argument
+				}
+			case dsl.KwPush:
+				hasPushKw = true
+			case dsl.KwPR:
+				hasPRKw = true
+				if prTitle == "" {
+					prTitle = a.Argument
+				}
+			}
+		}
+	}
+	if !hasBranchKw && !hasPushKw && !hasPRKw {
+		return // nothing to enforce
+	}
+
+	// Find existing workflow nodes (LLM may already have produced them correctly).
+	var branchNode, pushNode, prNode *dag.Node
+	for _, n := range d.Nodes {
+		switch n.Type {
+		case dag.TypeBranch:
+			branchNode = n
+		case dag.TypePush:
+			pushNode = n
+		case dag.TypePR:
+			prNode = n
+		}
+	}
+
+	// Upgrade task-typed nodes to workflow types when ID matches by heuristic.
+	for _, n := range d.Nodes {
+		if n.Type != dag.TypeTask {
+			continue
+		}
+		idLower := strings.ToLower(n.ID)
+		if hasBranchKw && branchNode == nil && strings.Contains(idLower, "branch") {
+			n.Type = dag.TypeBranch
+			if n.Annotation == "" {
+				n.Annotation = branchName
+			}
+			branchNode = n
+			continue
+		}
+		if hasPushKw && pushNode == nil && strings.Contains(idLower, "push") {
+			n.Type = dag.TypePush
+			pushNode = n
+			continue
+		}
+		if hasPRKw && prNode == nil && (strings.Contains(idLower, "pull_request") ||
+			strings.Contains(idLower, "pullrequest") ||
+			strings.Contains(idLower, "open_pr") ||
+			idLower == "pr" || strings.HasSuffix(idLower, "_pr")) {
+			n.Type = dag.TypePR
+			if n.Annotation == "" {
+				n.Annotation = prTitle
+			}
+			prNode = n
+			continue
+		}
+	}
+
+	// Inject any still-missing workflow nodes.
+	syncRepoExists := d.Nodes["sync_repo"] != nil
+	if hasBranchKw && branchNode == nil {
+		deps := []string{}
+		if syncRepoExists {
+			deps = append(deps, "sync_repo")
+		}
+		branchNode = &dag.Node{
+			ID:           "create_branch",
+			Type:         dag.TypeBranch,
+			Task:         "Create branch " + branchName,
+			Annotation:   branchName,
+			Dependencies: deps,
+		}
+		_ = d.AddNode(branchNode)
+		if syncRepoExists {
+			_ = d.AddEdge("sync_repo", branchNode.ID)
+		}
+	}
+	if hasPushKw && pushNode == nil {
+		pushNode = &dag.Node{
+			ID:   "push_branch",
+			Type: dag.TypePush,
+			Task: "Push current branch to remote",
+		}
+		_ = d.AddNode(pushNode)
+	}
+	if hasPRKw && prNode == nil {
+		prNode = &dag.Node{
+			ID:         "open_pr",
+			Type:       dag.TypePR,
+			Task:       "Open pull request",
+			Annotation: prTitle,
+		}
+		_ = d.AddNode(prNode)
+	}
+
+	addDep := func(from, to string) {
+		if from == "" || to == "" || from == to {
+			return
+		}
+		toNode := d.Nodes[to]
+		fromNode := d.Nodes[from]
+		if toNode == nil || fromNode == nil {
+			return
+		}
+		for _, dep := range toNode.Dependencies {
+			if dep == from {
+				return
+			}
+		}
+		toNode.Dependencies = append(toNode.Dependencies, from)
+		_ = d.AddEdge(from, to)
+	}
+
+	isWorkflow := func(t dag.NodeType) bool {
+		return t == dag.TypeBranch || t == dag.TypePush || t == dag.TypePR || t == dag.TypeSyncRepo
+	}
+
+	// All non-workflow nodes (except sync_repo) depend on branch.
+	if branchNode != nil {
+		for _, n := range d.Nodes {
+			if n.ID == branchNode.ID || isWorkflow(n.Type) {
+				continue
+			}
+			addDep(branchNode.ID, n.ID)
+		}
+	}
+
+	// Push depends on all non-workflow nodes and on branch.
+	if pushNode != nil {
+		for _, n := range d.Nodes {
+			if n.ID == pushNode.ID || isWorkflow(n.Type) {
+				continue
+			}
+			addDep(n.ID, pushNode.ID)
+		}
+		if branchNode != nil {
+			addDep(branchNode.ID, pushNode.ID)
+		}
+	}
+
+	// PR depends on push (or on branch if no push).
+	if prNode != nil {
+		switch {
+		case pushNode != nil:
+			addDep(pushNode.ID, prNode.ID)
+		case branchNode != nil:
+			addDep(branchNode.ID, prNode.ID)
+		}
+	}
 }
 
 func buildPlanningPrompt(specs []*dsl.ParsedSpec, cfg *config.Config, repoCtx string) string {
@@ -156,10 +330,27 @@ Rules:
 - NOTIFY_ME annotations → node type "notify"
 - WHEN/DO annotations → node type "wait_event"
 - TRY/OR_ELSE annotations → node type "try_else"
-- NEW BRANCH <name> annotations → node type "branch", annotation field = branch name
-- PUSH annotations → node type "push"
-- PR ["title"] annotations → node type "pr", annotation field = PR title (may be empty)
+- NEW BRANCH <name> annotations → node type "branch", annotation field = branch name (NEVER type "task")
+- PUSH annotations → node type "push" (NEVER type "task" — DO NOT instruct the agent to run git push manually)
+- PR ["title"] annotations → node type "pr", annotation field = PR title (NEVER type "task")
 - NOT_TODO items must NOT appear as nodes
+
+CRITICAL ORDERING when these workflow annotations exist:
+  sync_repo → branch → <all edit/test/notify nodes in parallel between themselves> → push → pr
+  - Every edit/test node MUST depend on the branch node (do not create files outside the new branch)
+  - The push node MUST depend on every edit/test node
+  - The pr node MUST depend on the push node
+  - DO NOT use generic "task" type to represent push or pr — use the workflow types so base/head are handled correctly by the backend (otherwise PR creation fails with 422)
+
+BAD example (file edit running in parallel with branch creation — file ends up on the wrong branch):
+  [{"id":"create_branch","type":"branch","dependencies":[]},
+   {"id":"create_index_html","type":"task","dependencies":[]}]
+
+GOOD example:
+  [{"id":"create_branch","type":"branch","annotation":"feature/x","dependencies":[]},
+   {"id":"create_index_html","type":"task","dependencies":["create_branch"]},
+   {"id":"push_branch","type":"push","dependencies":["create_index_html"]},
+   {"id":"open_pr","type":"pr","annotation":"feat: x","dependencies":["push_branch"]}]
 - Nodes that are independent of each other must NOT have dependencies between them (they run in parallel)
 - Each node needs a clear, actionable "task" string describing exactly what the agent should do
 - The "task" field is the FULL prompt the agent receives — it MUST be self-contained. Restate the user's
