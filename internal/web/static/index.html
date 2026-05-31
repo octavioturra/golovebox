@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>golovebox</title>
 <style>
+[x-cloak]{display:none!important}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:100vh;overflow:hidden}
 #app{display:flex;height:100vh}
@@ -12,621 +13,689 @@ body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:10
 #chat{width:380px;min-width:280px;display:flex;flex-direction:column;border-right:1px solid #1e293b;background:#1e293b}
 #chat-header{padding:12px 16px;border-bottom:1px solid #334155;display:flex;align-items:center;gap:8px}
 #chat-header h1{font-size:1rem;font-weight:600;color:#f8fafc}
-#status-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;flex-shrink:0}
-#status-dot.red{background:#ef4444}
-/* Health panel */
+.status-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;flex-shrink:0}
+.status-dot.red{background:#ef4444}
+/* Health */
 #health-panel{padding:8px 16px;border-bottom:1px solid #334155;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.health-indicator{font-size:0.75rem;display:flex;align-items:center;gap:3px;cursor:default}
-.health-dot{font-size:1rem;line-height:1;color:#9ca3af;transition:color .2s}
+.h-indicator{font-size:0.75rem;display:flex;align-items:center;gap:3px;cursor:default}
+.h-dot{font-size:1rem;line-height:1;color:#9ca3af;transition:color .2s}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-.health-dot.checking{animation:pulse 1s infinite}
+.h-dot.checking{animation:pulse 1s infinite}
 #health-refresh{margin-left:auto;background:none;border:none;color:#64748b;cursor:pointer;font-size:0.8rem;padding:2px 4px;border-radius:4px}
 #health-refresh:hover{color:#e2e8f0;background:#334155}
+/* Messages */
 #messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
-.msg{padding:8px 12px;border-radius:8px;font-size:0.8rem;line-height:1.4}
+.msg{padding:8px 12px;border-radius:8px;font-size:0.8rem;line-height:1.4;white-space:pre-wrap;word-break:break-word}
 .msg.system{background:#0f172a;color:#94a3b8}
-.msg.user{background:#1d4ed8;color:#fff;align-self:flex-end}
 .msg.agent{background:#1e3a5f;color:#bfdbfe}
 .msg.ok{background:#14532d;color:#86efac}
 .msg.err{background:#450a0a;color:#fca5a5}
 .msg.warn{background:#431407;color:#fed7aa}
 .msg.task{background:#1c1f3a;border-left:2px solid #3b82f6;color:#bfdbfe;font-style:italic}
-.msg-err-detail{font-size:0.7rem;color:#f87171;margin-top:4px;font-family:monospace;white-space:pre-wrap;word-break:break-all}
+.msg-detail{font-size:0.7rem;color:#f87171;margin-top:4px;font-family:monospace}
+/* Upload */
 #upload-area{padding:12px;border-top:1px solid #334155}
 #upload-area label{display:block;font-size:0.75rem;color:#94a3b8;margin-bottom:6px}
-#spec-input{display:none}
 #drop-zone{border:2px dashed #334155;border-radius:8px;padding:16px;text-align:center;cursor:pointer;font-size:0.8rem;color:#64748b;transition:border-color .2s}
 #drop-zone:hover,#drop-zone.drag{border-color:#3b82f6;color:#93c5fd}
-#file-list{margin-top:6px;font-size:0.75rem;color:#64748b}
-/* Manual task input */
+.file-list{margin-top:6px;font-size:0.75rem;color:#64748b}
+/* Task */
 #task-area{padding:0 12px 12px}
 #task-area label{display:block;font-size:0.75rem;color:#94a3b8;margin-bottom:4px}
-#task-input{width:100%;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:8px;resize:vertical;font-family:inherit}
-#task-input:focus{outline:none;border-color:#3b82f6}
-#task-btn{width:100%;margin-top:6px;padding:8px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:500}
-#task-btn:hover{background:#1d4ed8}
-#task-btn:disabled{background:#334155;cursor:not-allowed;color:#64748b}
-#run-btn{width:100%;margin-top:8px;padding:8px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:500}
-#run-btn:hover{background:#1d4ed8}
-#run-btn:disabled{background:#334155;cursor:not-allowed;color:#64748b}
-/* Runs list */
-#runs-panel{padding:12px;border-top:1px solid #334155}
+.task-ta{width:100%;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:8px;resize:vertical;font-family:inherit}
+.task-ta:focus{outline:none;border-color:#3b82f6}
+.btn-primary{width:100%;margin-top:6px;padding:8px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:500}
+.btn-primary:hover{background:#1d4ed8}
+.btn-primary:disabled{background:#334155;cursor:not-allowed;color:#64748b}
+/* Runs */
+#runs-panel{padding:12px;border-top:1px solid #334155;min-height:0}
 #runs-panel h2{font-size:0.75rem;color:#94a3b8;margin-bottom:6px}
 #runs-list{display:flex;flex-direction:column;gap:4px;max-height:140px;overflow-y:auto}
 .run-item{padding:6px 8px;border-radius:6px;background:#0f172a;cursor:pointer;font-size:0.75rem}
 .run-item:hover{background:#1e3a5f}
 .run-item.active{border-left:2px solid #3b82f6}
-.run-item-row{display:flex;justify-content:space-between;align-items:center}
-.run-task-preview{font-size:0.65rem;color:#64748b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.run-badge{padding:2px 6px;border-radius:9999px;font-size:0.65rem;font-weight:600;flex-shrink:0}
-.run-badge.done{background:#14532d;color:#86efac}
-.run-badge.running{background:#78350f;color:#fcd34d}
-.run-badge.error{background:#450a0a;color:#fca5a5}
-/* DAG panel */
+.run-row{display:flex;justify-content:space-between;align-items:center}
+.run-preview{font-size:0.65rem;color:#64748b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge{padding:2px 6px;border-radius:9999px;font-size:0.65rem;font-weight:600}
+.badge.done{background:#14532d;color:#86efac}
+.badge.running{background:#78350f;color:#fcd34d}
+.badge.error{background:#450a0a;color:#fca5a5}
+/* DAG */
 #dag-panel{flex:1;display:flex;flex-direction:column;overflow:hidden;position:relative}
 #dag-header{padding:10px 16px;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:8px;font-size:0.8rem;color:#94a3b8}
-#current-run-label{font-weight:600;color:#e2e8f0}
-#stop-btn{margin-left:auto;padding:4px 10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:6px;cursor:pointer;font-size:0.75rem;display:none}
-#stop-btn:hover{background:#991b1b}
-#dag-canvas{flex:1;width:100%;background:#0a0f1e;cursor:pointer}
-/* Canvas tooltip */
-#canvas-tooltip{position:fixed;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:0.75rem;color:#e2e8f0;pointer-events:none;display:none;z-index:50;max-width:260px;word-break:break-all}
-/* Node log panel */
+#run-label{font-weight:600;color:#e2e8f0}
+.stop-btn{margin-left:auto;padding:4px 10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:6px;cursor:pointer;font-size:0.75rem}
+.stop-btn:hover{background:#991b1b}
+#dag-canvas{flex:1;width:100%;background:#0a0f1e}
+#canvas-tooltip{position:fixed;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:0.75rem;color:#e2e8f0;pointer-events:none;display:none;z-index:50;max-width:260px;word-break:break-all;white-space:pre-wrap}
+/* Node panel */
 #node-panel{position:absolute;top:0;right:0;bottom:0;width:340px;background:#1e293b;border-left:1px solid #334155;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .2s}
 #node-panel.open{transform:translateX(0)}
-#node-panel-header{padding:10px 12px;border-bottom:1px solid #334155;display:flex;align-items:center;gap:8px;font-size:0.8rem}
-#node-panel-title{font-weight:600;color:#e2e8f0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#node-panel-close{background:none;border:none;color:#64748b;cursor:pointer;font-size:1rem;padding:0 4px}
-#node-panel-close:hover{color:#e2e8f0}
-#node-panel-meta{padding:8px 10px;border-bottom:1px solid #1e293b;font-size:0.73rem;color:#64748b}
-#node-panel-meta strong{color:#94a3b8;display:block;margin-bottom:2px}
-#node-panel-meta .meta-val{color:#bfdbfe;font-style:italic}
-#node-error-box{margin:8px 10px;padding:8px;background:#450a0a;border-radius:6px;font-size:0.73rem;color:#fca5a5;font-family:monospace;white-space:pre-wrap;word-break:break-all;display:none}
+.np-header{padding:10px 12px;border-bottom:1px solid #334155;display:flex;align-items:center;gap:8px;font-size:0.8rem}
+.np-title{font-weight:600;color:#e2e8f0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.np-close{background:none;border:none;color:#64748b;cursor:pointer;font-size:1rem;padding:0 4px}
+.np-close:hover{color:#e2e8f0}
+.np-meta{padding:8px 10px;border-bottom:1px solid #1e293b;font-size:0.73rem;color:#64748b}
+.np-meta strong{color:#94a3b8;display:block;margin-bottom:2px}
+.np-meta-val{color:#bfdbfe;font-style:italic}
+.np-error{margin:8px 10px;padding:8px;background:#450a0a;border-radius:6px;font-size:0.73rem;color:#fca5a5;font-family:monospace;white-space:pre-wrap;word-break:break-all}
 #node-log{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;font-size:0.75rem}
 .log-entry{background:#0f172a;border-radius:6px;padding:8px;border-left:2px solid #334155}
-.log-entry-header{color:#64748b;margin-bottom:4px;font-size:0.7rem}
-.log-params{color:#93c5fd;font-family:monospace;white-space:pre-wrap;word-break:break-all;margin-bottom:2px}
+.log-hdr{color:#64748b;margin-bottom:4px;font-size:0.7rem;display:flex;justify-content:space-between}
+.log-param{color:#93c5fd;font-family:monospace;white-space:pre-wrap;word-break:break-all;margin-bottom:2px}
 .log-obs{color:#a3e635;font-family:monospace;white-space:pre-wrap;word-break:break-all}
-/* Checkpoint dialog */
-#checkpoint-dialog{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;min-width:360px;z-index:100;box-shadow:0 25px 50px rgba(0,0,0,.5)}
-#checkpoint-dialog h3{font-size:0.95rem;margin-bottom:8px;color:#f8fafc}
-#checkpoint-dialog p{font-size:0.8rem;color:#94a3b8;margin-bottom:16px}
-#checkpoint-dialog .btns{display:flex;gap:8px}
-#cp-approve{flex:1;padding:8px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:500}
-#cp-reject{flex:1;padding:8px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:500}
-#cp-reason{width:100%;padding:6px 8px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.8rem;margin-bottom:8px}
-#overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99}
+/* Checkpoint */
+#overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99}
+#cp-dialog{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;min-width:360px;z-index:100;box-shadow:0 25px 50px rgba(0,0,0,.5)}
+#cp-dialog h3{font-size:0.95rem;margin-bottom:8px;color:#f8fafc}
+#cp-dialog p{font-size:0.8rem;color:#94a3b8;margin-bottom:16px}
+.cp-btns{display:flex;gap:8px}
+.cp-approve{flex:1;padding:8px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:500}
+.cp-reject{flex:1;padding:8px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:500}
+.cp-reason{width:100%;padding:6px 8px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.8rem;margin-bottom:8px}
 </style>
+
+<script>
+document.addEventListener('alpine:init', () => {
+
+  // ── Shared stores ────────────────────────────────────────
+  Alpine.store('session', {
+    runId:   null,
+    running: false,
+    connOk:  true,
+  });
+
+  Alpine.store('dag', {
+    data:  null,   // raw DAG {nodes, edges}
+    nodes: {},     // nodeId → {state, error, iterCount}
+    reset() {
+      this.data  = null;
+      this.nodes = {};
+    },
+    update(id, state, error) {
+      this.nodes = {
+        ...this.nodes,
+        [id]: { ...(this.nodes[id] || {}), state, error: error || '' },
+      };
+    },
+    setIter(id, iter) {
+      this.nodes = {
+        ...this.nodes,
+        [id]: { ...(this.nodes[id] || {}), iterCount: iter },
+      };
+    },
+  });
+
+  // ── healthPanel ──────────────────────────────────────────
+  Alpine.data('healthPanel', () => ({
+    loading: false,
+    checks: {
+      vm:     { ok: null, msg: '' },
+      llm:    { ok: null, msg: '' },
+      github: { ok: null, msg: '' },
+      repo:   { ok: null, msg: '' },
+    },
+    async check() {
+      this.loading = true;
+      try {
+        const data = await fetch('/api/health').then(r => r.json());
+        this.checks = data;
+      } catch(e) {
+        ['vm','llm','github','repo'].forEach(k => {
+          this.checks[k] = { ok: false, msg: 'erro: ' + e.message };
+        });
+      } finally {
+        this.loading = false;
+      }
+    },
+    color(key) {
+      if (this.loading || this.checks[key].ok === null) return '#9ca3af';
+      return this.checks[key].ok ? '#34d399' : '#f87171';
+    },
+    init() { this.check(); },
+  }));
+
+  // ── chatPanel ────────────────────────────────────────────
+  Alpine.data('chatPanel', () => ({
+    messages: [],
+    task:     '',
+    files:    [],
+    dragging: false,
+    running:  false,
+
+    get fileNames() {
+      return this.files.map(f => f.name).join(', ') || 'Nenhum arquivo .md selecionado';
+    },
+
+    addMsg(text, type = 'system', detail = '') {
+      this.messages.push({ id: Date.now() + Math.random(), text, type, detail });
+      this.$nextTick(() => {
+        const el = this.$refs.log;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+
+    handleDrop(e) {
+      this.dragging = false;
+      this.files = [...e.dataTransfer.files].filter(f => f.name.endsWith('.md'));
+    },
+    handleFileChange(e) {
+      this.files = [...e.target.files].filter(f => f.name.endsWith('.md'));
+    },
+
+    async submitFiles() {
+      if (!this.files.length || this.running) return;
+      this.running = true;
+      Alpine.store('session').running = true;
+      this.addMsg(`Enviando ${this.files.length} spec(s)...`);
+      const form = new FormData();
+      this.files.forEach(f => form.append('spec', f, f.name));
+      try {
+        const r = await fetch('/api/run', { method: 'POST', body: form });
+        if (!r.ok) throw new Error(await r.text());
+        const { run_id } = await r.json();
+        this.addMsg(`Run iniciada: ${run_id}`, 'ok');
+        this.files = [];
+        this._startRun(run_id);
+      } catch(e) {
+        this.addMsg(`Erro: ${e.message}`, 'err');
+        this.running = false;
+        Alpine.store('session').running = false;
+      }
+    },
+
+    async execute() {
+      const task = this.task.trim();
+      if (!task || this.running) return;
+      this.running = true;
+      Alpine.store('session').running = true;
+      this.addMsg('Enviando tarefa...', 'system');
+      try {
+        const r = await fetch('/api/run', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ task }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const { run_id } = await r.json();
+        this.addMsg(`Run iniciada: ${run_id}`, 'ok');
+        this.addMsg(`📋 "${task}"`, 'task');
+        this.task = '';
+        this._startRun(run_id);
+      } catch(e) {
+        this.addMsg(`Erro: ${e.message}`, 'err');
+        this.running = false;
+        Alpine.store('session').running = false;
+      }
+    },
+
+    async stop() {
+      const runId = Alpine.store('session').runId;
+      if (!runId) return;
+      try {
+        await fetch(`/api/runs/${runId}/stop`, { method: 'POST' });
+        this.addMsg(`Run cancelada: ${runId}`, 'warn');
+      } catch(e) {
+        this.addMsg(`Erro ao parar: ${e.message}`, 'err');
+      }
+    },
+
+    _startRun(runId) {
+      Alpine.store('session').runId = runId;
+      localStorage.setItem('glb_run_id', runId);
+      window.dispatchEvent(new CustomEvent('run-started', { detail: { runId } }));
+      selectRunGlobal(runId);
+    },
+
+    // Called by run-selected event (user clicks run in list)
+    onRunSelected(runId) {
+      Alpine.store('session').runId = runId;
+      localStorage.setItem('glb_run_id', runId);
+      selectRunGlobal(runId);
+    },
+
+    // Called by sse-state-change event
+    onStateChange(data) {
+      const state = data.state || '';
+      if (!state) return;
+      if (state === 'error') {
+        this.addMsg(`[error] ${data.id}`, 'err', data.error || '');
+      } else {
+        const typeMap = { done:'ok', waiting_human:'warn', running:'agent', pending:'agent', error:'err' };
+        this.addMsg(`[${state}] ${data.id}`, typeMap[state] || 'system');
+      }
+      // Sync running state from dag store
+      const nodes = Alpine.store('dag').nodes;
+      const busy = Object.values(nodes).some(n => n.state === 'running' || n.state === 'pending');
+      this.running = busy;
+      Alpine.store('session').running = busy;
+    },
+
+    async init() {
+      try {
+        const r = await fetch('/api/status');
+        Alpine.store('session').connOk = r.ok;
+      } catch(_) { Alpine.store('session').connOk = false; }
+
+      this.addMsg('Bem-vindo ao golovebox. Faça upload de arquivos .md ou digite uma tarefa para iniciar.');
+
+      const savedRunId = localStorage.getItem('glb_run_id');
+      if (savedRunId) {
+        Alpine.store('session').runId = savedRunId;
+        await selectRunGlobal(savedRunId);
+        const savedNodeId = localStorage.getItem('glb_node_id');
+        if (savedNodeId) {
+          window.dispatchEvent(new CustomEvent('node-selected', {
+            detail: { runId: savedRunId, nodeId: savedNodeId }
+          }));
+        }
+      }
+    },
+  }));
+
+  // ── runList ──────────────────────────────────────────────
+  Alpine.data('runList', () => ({
+    runs: [],
+    async load() {
+      try {
+        const data = await fetch('/api/runs').then(r => r.json());
+        this.runs = data || [];
+      } catch(_) {}
+    },
+    select(runId) {
+      window.dispatchEvent(new CustomEvent('run-selected', { detail: { runId } }));
+    },
+    badgeClass(state) {
+      return 'badge ' + (state || 'system');
+    },
+    isActive(runId) {
+      return runId === Alpine.store('session').runId;
+    },
+    init() { this.load(); },
+  }));
+
+  // ── nodePanel ────────────────────────────────────────────
+  Alpine.data('nodePanel', () => ({
+    open:     false,
+    nodeId:   null,
+    runId:    null,
+    entries:  [],
+    runTask:  '',
+    nodeDesc: '',
+    nodeError:'',
+
+    async openFor(runId, nodeId) {
+      this.runId   = runId;
+      this.nodeId  = nodeId;
+      this.open    = true;
+      this.entries = [];
+      this.runTask = '';
+      this.nodeDesc= '';
+      this.nodeError = '';
+      localStorage.setItem('glb_node_id', nodeId);
+
+      try {
+        const [logData, runData] = await Promise.all([
+          fetch(`/api/runs/${runId}/nodes/${nodeId}/log`).then(r => r.json()),
+          fetch(`/api/runs/${runId}`).then(r => r.json()),
+        ]);
+        this.entries  = logData || [];
+        this.runTask  = runData.task || '';
+        // Node description from DAG
+        const dagStore = Alpine.store('dag');
+        const node = dagStore.data && dagStore.data.nodes && dagStore.data.nodes[nodeId];
+        this.nodeDesc  = (node && (node.annotation || node.task)) || '';
+        this.nodeError = (dagStore.nodes[nodeId] && dagStore.nodes[nodeId].error) || '';
+        this._scrollLog();
+      } catch(_) {}
+    },
+
+    close() {
+      this.open   = false;
+      this.nodeId = null;
+      localStorage.removeItem('glb_node_id');
+    },
+
+    onNodeLog(nodeId, entry) {
+      if (nodeId !== this.nodeId) return;
+      this.entries.push(entry);
+      this._scrollLog();
+    },
+
+    fmtTime(ts) {
+      return ts ? new Date(ts).toLocaleTimeString() : '';
+    },
+
+    _scrollLog() {
+      this.$nextTick(() => {
+        const el = this.$refs.logEntries;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+  }));
+
+  // ── checkpointDialog ─────────────────────────────────────
+  Alpine.data('checkpointDialog', () => ({
+    open:       false,
+    runId:      null,
+    nodeId:     null,
+    annotation: '',
+    reason:     '',
+
+    openFor(runId, nodeId, annotation) {
+      this.runId      = runId;
+      this.nodeId     = nodeId;
+      this.annotation = annotation;
+      this.reason     = '';
+      this.open       = true;
+    },
+    close() { this.open = false; },
+    async approve() {
+      if (!this.runId) return;
+      this.close();
+      await fetch(`/api/runs/${this.runId}/approve/${this.nodeId}`, { method: 'POST' });
+      window.dispatchEvent(new CustomEvent('cp-result', { detail: { nodeId: this.nodeId, approved: true } }));
+    },
+    async reject() {
+      if (!this.runId) return;
+      const reason = this.reason.trim() || 'rejeitado pelo usuário';
+      this.close();
+      await fetch(`/api/runs/${this.runId}/reject/${this.nodeId}`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ reason }),
+      });
+      window.dispatchEvent(new CustomEvent('cp-result', { detail: { nodeId: this.nodeId, approved: false } }));
+    },
+  }));
+
+}); // end alpine:init
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 </head>
 <body>
 <div id="app">
-  <!-- Left: Chat -->
-  <aside id="chat">
+
+  <!-- ── Left: Chat ─────────────────────────────────────── -->
+  <aside id="chat"
+         x-data="chatPanel"
+         @run-selected.window="onRunSelected($event.detail.runId)"
+         @sse-state-change.window="onStateChange($event.detail)"
+         @cp-result.window="addMsg($event.detail.approved ? 'Aprovado: '+$event.detail.nodeId : 'Rejeitado: '+$event.detail.nodeId, $event.detail.approved ? 'ok' : 'err')">
+
     <div id="chat-header">
-      <div id="status-dot"></div>
+      <div class="status-dot" :class="{red: !$store.session.connOk}"></div>
       <h1>golovebox</h1>
     </div>
 
-    <!-- Health panel -->
-    <div id="health-panel">
-      <div class="health-indicator">
-        <span class="health-dot" id="health-vm">●</span>
-        <span>VM</span>
-      </div>
-      <div class="health-indicator">
-        <span class="health-dot" id="health-llm">●</span>
-        <span>LLM</span>
-      </div>
-      <div class="health-indicator">
-        <span class="health-dot" id="health-github">●</span>
-        <span>GitHub</span>
-      </div>
-      <div class="health-indicator">
-        <span class="health-dot" id="health-repo">●</span>
-        <span>Repo</span>
-      </div>
-      <button id="health-refresh" title="Verificar health">↻</button>
+    <!-- Health -->
+    <div id="health-panel" x-data="healthPanel">
+      <template x-for="key in ['vm','llm','github','repo']" :key="key">
+        <div class="h-indicator">
+          <span class="h-dot"
+                :class="{checking: loading}"
+                :style="'color:' + color(key)"
+                :title="checks[key] ? checks[key].msg : ''"
+                >●</span>
+          <span x-text="key.toUpperCase()"></span>
+        </div>
+      </template>
+      <button id="health-refresh" @click="check()" title="Verificar health">↻</button>
     </div>
 
-    <div id="messages"></div>
+    <!-- Messages -->
+    <div id="messages" x-ref="log">
+      <template x-for="m in messages" :key="m.id">
+        <div :class="'msg ' + m.type">
+          <span x-text="m.text"></span>
+          <div x-show="m.detail" class="msg-detail" x-text="m.detail"></div>
+        </div>
+      </template>
+    </div>
 
+    <!-- File upload -->
     <div id="upload-area">
       <label>Spec files (.md)</label>
-      <div id="drop-zone" onclick="document.getElementById('spec-input').click()">
+      <div id="drop-zone"
+           :class="{drag: dragging}"
+           @click="$refs.fileInput.click()"
+           @dragover.prevent="dragging=true"
+           @dragleave.prevent="dragging=false"
+           @drop.prevent="handleDrop($event)">
         Clique ou arraste arquivos .md aqui
       </div>
-      <input type="file" id="spec-input" multiple accept=".md">
-      <div id="file-list"></div>
-      <button id="run-btn" disabled>▶ Executar specs</button>
+      <input type="file" x-ref="fileInput" multiple accept=".md"
+             @change="handleFileChange($event)" style="display:none">
+      <div class="file-list" x-text="fileNames"></div>
+      <button class="btn-primary"
+              @click="submitFiles()"
+              :disabled="files.length === 0 || running">▶ Executar specs</button>
     </div>
 
-    <!-- Manual task input -->
+    <!-- Manual task -->
     <div id="task-area">
       <label>ou digite a tarefa:</label>
-      <textarea id="task-input" rows="5" placeholder="Implemente o endpoint POST /api/users com validação de email..."></textarea>
-      <button id="task-btn">▶ Executar</button>
+      <textarea class="task-ta" x-model="task" rows="5"
+                placeholder="Implemente o endpoint POST /api/users com validação de email..."
+                @keydown.ctrl.enter="execute()"></textarea>
+      <button class="btn-primary"
+              @click="execute()"
+              :disabled="!task.trim() || running">▶ Executar</button>
     </div>
 
-    <div id="runs-panel">
+    <!-- Runs list -->
+    <div id="runs-panel"
+         x-data="runList"
+         @run-started.window="load()"
+         @run-selected.window="load()">
       <h2>Runs anteriores</h2>
-      <div id="runs-list"></div>
+      <div id="runs-list">
+        <template x-for="r in runs" :key="r.id">
+          <div class="run-item"
+               :class="{active: isActive(r.id)}"
+               @click="select(r.id)">
+            <div class="run-row">
+              <span x-text="r.id"></span>
+              <span :class="badgeClass(r.state)" x-text="r.state"></span>
+            </div>
+            <div class="run-preview" x-show="r.task" x-text="'\"' + r.task + '\"'"></div>
+          </div>
+        </template>
+      </div>
     </div>
+
   </aside>
 
-  <!-- Right: DAG canvas + node panel -->
+  <!-- ── Right: DAG ─────────────────────────────────────── -->
   <main id="dag-panel">
     <div id="dag-header">
       <span>DAG</span>
-      <span id="current-run-label"></span>
-      <button id="stop-btn" title="Cancelar run">⏹ Parar run</button>
+      <span id="run-label" x-text="$store.session.runId || ''" x-data></span>
+      <button class="stop-btn"
+              x-show="$store.session.running"
+              x-cloak
+              x-data
+              @click="window.dispatchEvent(new CustomEvent('stop-run'))">⏹ Parar run</button>
     </div>
     <canvas id="dag-canvas"></canvas>
     <div id="canvas-tooltip"></div>
 
-    <!-- Node log side panel -->
-    <div id="node-panel">
-      <div id="node-panel-header">
-        <span id="node-panel-title">node</span>
-        <button id="node-panel-close">×</button>
+    <!-- Node log panel -->
+    <div id="node-panel"
+         x-data="nodePanel"
+         :class="{open: open}"
+         @node-selected.window="openFor($event.detail.runId, $event.detail.nodeId)"
+         @sse-node-log.window="onNodeLog($event.detail.nodeId, $event.detail.entry)">
+
+      <div class="np-header">
+        <span class="np-title" x-text="'node: ' + (nodeId || '')"></span>
+        <button class="np-close" @click="close()">×</button>
       </div>
-      <div id="node-panel-meta">
-        <div id="node-run-task" style="display:none">
+
+      <div class="np-meta">
+        <div x-show="runTask">
           <strong>Objetivo do run:</strong>
-          <span class="meta-val" id="node-run-task-text"></span>
+          <span class="np-meta-val" x-text="runTask"></span>
         </div>
-        <div id="node-description" style="display:none;margin-top:6px">
+        <div x-show="nodeDesc" style="margin-top:6px">
           <strong>Descrição do node:</strong>
-          <span class="meta-val" id="node-description-text"></span>
+          <span class="np-meta-val" x-text="nodeDesc"></span>
         </div>
       </div>
-      <div id="node-error-box"></div>
-      <div id="node-log"></div>
+
+      <div class="np-error" x-show="nodeError" x-text="'✗ Erro:\n' + nodeError"></div>
+
+      <div id="node-log" x-ref="logEntries">
+        <template x-for="(e, i) in entries" :key="i">
+          <div class="log-entry">
+            <div class="log-hdr">
+              <span x-text="'iter ' + e.iter + ' — ' + e.action"></span>
+              <span x-text="fmtTime(e.ts)"></span>
+            </div>
+            <div class="log-param" x-show="e.params" x-text="'▶ ' + (e.params || e.action)"></div>
+            <div class="log-obs" x-text="'◀ ' + (e.obs || '')"></div>
+          </div>
+        </template>
+      </div>
+
     </div>
   </main>
 </div>
 
-<!-- Checkpoint approval dialog -->
-<div id="overlay"></div>
-<div id="checkpoint-dialog">
-  <h3 id="cp-title">Checkpoint</h3>
-  <p id="cp-desc"></p>
-  <input id="cp-reason" type="text" placeholder="Motivo da rejeição (opcional)">
-  <div class="btns">
-    <button id="cp-approve">✓ Aprovar</button>
-    <button id="cp-reject">✗ Rejeitar</button>
+<!-- Checkpoint dialog -->
+<div x-data="checkpointDialog"
+     @sse-checkpoint.window="openFor($event.detail.runId, $event.detail.nodeId, $event.detail.annotation)">
+  <div id="overlay" x-cloak x-show="open" @click="close()"></div>
+  <div id="cp-dialog" x-cloak x-show="open">
+    <h3 x-text="'Checkpoint: ' + (nodeId || '')"></h3>
+    <p x-text="annotation"></p>
+    <input class="cp-reason" type="text" x-model="reason" placeholder="Motivo da rejeição (opcional)">
+    <div class="cp-btns">
+      <button class="cp-approve" @click="approve()">✓ Aprovar</button>
+      <button class="cp-reject"  @click="reject()">✗ Rejeitar</button>
+    </div>
   </div>
 </div>
 
 <script>
-// ── State ────────────────────────────────────────────────
-let currentRunId = null;
-let currentRunTask = '';
-let dagData = null;
-let nodeStates = {};
-let nodeErrors = {};    // nodeID → error string
-let iterCounts = {};    // nodeID → current iter count
-let evtSource = null;
-let pendingCheckpoint = null;
-let selectedFiles = [];
-let currentNodeId = null;
-let activeRunIds = new Set(); // runs currently executing
+// ── Vanilla JS: global SSE + Canvas2D ─────────────────────
+// These live outside Alpine because Canvas2D is imperative by nature,
+// and EventSource is a long-lived global resource.
 
 const NODE_W = 160, NODE_H = 48;
 const COLORS = {
-  pending:       '#4b5563',
-  running:       '#b45309',
-  done:          '#15803d',
-  error:         '#b91c1c',
-  waiting_human: '#c2410c',
+  pending:'#4b5563', running:'#b45309', done:'#15803d',
+  error:'#b91c1c', waiting_human:'#c2410c',
 };
 const TEXT_COLORS = {
-  pending:'#d1d5db', running:'#fef3c7', done:'#bbf7d0', error:'#fecaca', waiting_human:'#fed7aa',
+  pending:'#d1d5db', running:'#fef3c7', done:'#bbf7d0',
+  error:'#fecaca', waiting_human:'#fed7aa',
 };
 
-// ── UI helpers ────────────────────────────────────────────
-function addMsg(text, cls='system', detail='') {
-  const d = document.getElementById('messages');
-  const m = document.createElement('div');
-  m.className = 'msg ' + cls;
-  m.textContent = text;
-  if (detail) {
-    const dd = document.createElement('div');
-    dd.className = 'msg-err-detail';
-    dd.textContent = detail;
-    m.appendChild(dd);
-  }
-  d.appendChild(m);
-  d.scrollTop = d.scrollHeight;
-}
+let currentRunId = null;
+let clickAreas   = [];
+const canvas  = document.getElementById('dag-canvas');
+const tooltip = document.getElementById('canvas-tooltip');
 
-function setStatus(ok) {
-  document.getElementById('status-dot').className = ok ? '' : 'red';
-}
+// ── selectRunGlobal — called by chatPanel and init ─────────
+async function selectRunGlobal(runId) {
+  currentRunId = runId;
+  Alpine.store('dag').reset();
+  connectSSE(runId);
 
-function setStopBtn(visible) {
-  document.getElementById('stop-btn').style.display = visible ? 'block' : 'none';
-}
-
-// ── Health ────────────────────────────────────────────────
-async function checkHealth() {
-  const keys = ['vm','llm','github','repo'];
-  keys.forEach(k => {
-    const dot = document.getElementById('health-' + k);
-    dot.style.color = '#9ca3af';
-    dot.classList.add('checking');
-    dot.title = 'verificando...';
-  });
   try {
-    const res = await fetch('/api/health');
-    const data = await res.json();
-    for (const [key, val] of Object.entries(data)) {
-      const dot = document.getElementById('health-' + key);
-      if (!dot) continue;
-      dot.classList.remove('checking');
-      dot.style.color = val.ok ? '#34d399' : '#f87171';
-      dot.title = val.msg;
+    const data = await fetch(`/api/runs/${runId}`).then(r => r.json());
+    Alpine.store('dag').data = data.dag;
+
+    // Seed node states from persisted node_states.json
+    const ns = data.node_states || {};
+    for (const [id, s] of Object.entries(ns)) {
+      const state = typeof s === 'string' ? s : s.state;
+      const error = typeof s === 'object' ? (s.error || '') : '';
+      Alpine.store('dag').update(id, state, error);
     }
-  } catch(e) {
-    keys.forEach(k => {
-      const dot = document.getElementById('health-' + k);
-      dot.classList.remove('checking');
-      dot.style.color = '#f87171';
-      dot.title = 'erro: ' + e.message;
-    });
-  }
-}
-document.getElementById('health-refresh').onclick = checkHealth;
-
-// ── File handling ─────────────────────────────────────────
-const dropZone = document.getElementById('drop-zone');
-const specInput = document.getElementById('spec-input');
-const runBtn   = document.getElementById('run-btn');
-const fileList = document.getElementById('file-list');
-
-dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
-dropZone.addEventListener('drop', e => {
-  e.preventDefault();
-  dropZone.classList.remove('drag');
-  setFiles([...e.dataTransfer.files]);
-});
-specInput.addEventListener('change', () => setFiles([...specInput.files]));
-
-function setFiles(files) {
-  selectedFiles = files.filter(f => f.name.endsWith('.md'));
-  fileList.textContent = selectedFiles.map(f => f.name).join(', ') || 'Nenhum arquivo .md selecionado';
-  runBtn.disabled = selectedFiles.length === 0;
-}
-
-runBtn.addEventListener('click', startRun);
-
-async function startRun() {
-  if (selectedFiles.length === 0) return;
-  runBtn.disabled = true;
-  addMsg(`Enviando ${selectedFiles.length} spec(s)...`);
-
-  const form = new FormData();
-  selectedFiles.forEach(f => form.append('spec', f, f.name));
-
-  try {
-    const res = await fetch('/api/run', {method:'POST', body:form});
-    if (!res.ok) throw new Error(await res.text());
-    const {run_id} = await res.json();
-    addMsg(`Run iniciada: ${run_id}`, 'ok');
-    activeRunIds.add(run_id);
-    setStopBtn(true);
-    selectRun(run_id);
-    loadRuns();
-  } catch(e) {
-    addMsg(`Erro: ${e.message}`, 'err');
-    runBtn.disabled = false;
-  }
-}
-
-// ── Manual task ───────────────────────────────────────────
-const taskInput = document.getElementById('task-input');
-const taskBtn   = document.getElementById('task-btn');
-
-taskBtn.addEventListener('click', async () => {
-  const task = taskInput.value.trim();
-  if (!task) return;
-  taskBtn.disabled = true;
-  addMsg('Enviando tarefa...', 'system');
-  try {
-    const res = await fetch('/api/run', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({task}),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    const {run_id} = await res.json();
-    addMsg(`Run iniciada: ${run_id}`, 'ok');
-    addMsg(`📋 "${task}"`, 'task');
-    activeRunIds.add(run_id);
-    setStopBtn(true);
-    taskInput.value = '';
-    selectRun(run_id);
-    loadRuns();
-  } catch(e) {
-    addMsg(`Erro: ${e.message}`, 'err');
-  } finally {
-    taskBtn.disabled = false;
-  }
-});
-
-// ── Stop run ──────────────────────────────────────────────
-document.getElementById('stop-btn').addEventListener('click', async () => {
-  if (!currentRunId) return;
-  document.getElementById('stop-btn').disabled = true;
-  try {
-    await fetch(`/api/runs/${currentRunId}/stop`, {method:'POST'});
-    addMsg(`Run cancelada: ${currentRunId}`, 'warn');
-  } catch(e) {
-    addMsg(`Erro ao parar: ${e.message}`, 'err');
-  } finally {
-    document.getElementById('stop-btn').disabled = false;
-  }
-});
-
-// ── Runs list ─────────────────────────────────────────────
-async function loadRuns() {
-  try {
-    const res = await fetch('/api/runs');
-    if (!res.ok) return;
-    const runs = await res.json();
-    const list = document.getElementById('runs-list');
-    list.innerHTML = '';
-    (runs || []).forEach(r => {
-      const el = document.createElement('div');
-      el.className = 'run-item' + (r.id === currentRunId ? ' active' : '');
-      let inner = `<div class="run-item-row"><span>${r.id}</span><span class="run-badge ${r.state}">${r.state}</span></div>`;
-      if (r.task) inner += `<div class="run-task-preview">"${escHtml(r.task)}"</div>`;
-      el.innerHTML = inner;
-      el.onclick = () => selectRun(r.id);
-      list.appendChild(el);
-    });
+    drawDAG();
   } catch(_) {}
 }
 
-async function selectRun(runId) {
-  currentRunId = runId;
-  localStorage.setItem('glb_run_id', runId);
-  document.getElementById('current-run-label').textContent = runId;
-
-  if (evtSource) { evtSource.close(); evtSource = null; }
-  iterCounts = {};
-  nodeErrors = {};
-
-  try {
-    const res = await fetch(`/api/runs/${runId}`);
-    if (!res.ok) throw new Error('run not found');
-    const data = await res.json();
-    dagData = data.dag;
-    nodeStates = data.node_states || {};
-    currentRunTask = data.task || '';
-
-    // Extract errors from node_states
-    if (data.node_states) {
-      for (const [id, ns] of Object.entries(data.node_states)) {
-        if (ns && ns.error) nodeErrors[id] = ns.error;
-      }
-    }
-    renderDag();
-  } catch(e) {
-    addMsg(`Erro ao carregar run: ${e.message}`, 'err');
-    return;
-  }
-
-  connectSSE(runId);
-}
-
+// ── SSE ────────────────────────────────────────────────────
 function connectSSE(runId) {
-  if (evtSource) { evtSource.close(); evtSource = null; }
-  evtSource = new EventSource(`/api/runs/${runId}/stream`);
-  evtSource.onmessage = e => handleSSEEvent(e);
-  evtSource.onerror = () => setStatus(false);
-  evtSource.onopen  = () => setStatus(true);
-}
+  if (window._sse) { window._sse.close(); window._sse = null; }
+  const es = new EventSource(`/api/runs/${runId}/stream`);
+  window._sse = es;
 
-function handleSSEEvent(e) {
-  try {
-    const data = JSON.parse(e.data);
+  es.onopen  = () => { Alpine.store('session').connOk = true; };
+  es.onerror = () => { Alpine.store('session').connOk = false; };
 
-    // node_log event
+  es.onmessage = (e) => {
+    let data;
+    try { data = JSON.parse(e.data); } catch(_) { return; }
+
     if (data.type === 'node_log') {
-      iterCounts[data.node_id] = data.iter;
-      renderDag(); // update iter counter on canvas
-      if (data.node_id === currentNodeId) {
-        appendLogEntry(data);
-      }
+      Alpine.store('dag').setIter(data.node_id, data.iter);
+      drawDAG();
+      window.dispatchEvent(new CustomEvent('sse-node-log', {
+        detail: { nodeId: data.node_id, entry: data },
+      }));
       return;
     }
 
-    // node state change event
+    // Node state change (no type field, has id)
     if (!data.id) return;
-    const prev = nodeStates[data.id];
-    if (dagData && dagData.nodes) {
-      dagData.nodes[data.id] = {...(dagData.nodes[data.id] || {}), ...data};
-    }
-    nodeStates[data.id] = data.state || data;
-    if (data.error) nodeErrors[data.id] = data.error;
+    Alpine.store('dag').update(data.id, data.state, data.error || '');
+    window.dispatchEvent(new CustomEvent('sse-state-change', { detail: data }));
+    drawDAG();
 
-    const stateStr = data.state || '';
-    if (stateStr !== prev) {
-      if (stateStr === 'error') {
-        addMsg(`[error] ${data.id}`, 'err', data.error || '');
-      } else {
-        addMsg(`[${stateStr}] ${data.id}`, stateClass(stateStr));
-      }
+    if (data.state === 'waiting_human') {
+      window.dispatchEvent(new CustomEvent('sse-checkpoint', {
+        detail: { runId: currentRunId, nodeId: data.id, annotation: data.annotation || data.id },
+      }));
     }
-    renderDag();
-
-    if (stateStr === 'waiting_human') {
-      openCheckpointDialog(currentRunId, data.id, data.annotation || data.id);
-    }
-    // Update stop button visibility
-    const hasRunning = Object.values(nodeStates).some(ns => {
-      const s = typeof ns === 'string' ? ns : (ns && ns.state);
-      return s === 'running' || s === 'pending';
-    });
-    setStopBtn(hasRunning);
-    if (!hasRunning) activeRunIds.delete(currentRunId);
-  } catch(_) {}
+  };
 }
 
-function stateClass(s) {
-  switch(s) {
-    case 'done': return 'ok';
-    case 'error': return 'err';
-    case 'waiting_human': return 'warn';
-    default: return 'agent';
-  }
-}
-
-// ── Node log panel ────────────────────────────────────────
-async function openNodePanel(runId, nodeId) {
-  currentNodeId = nodeId;
-  localStorage.setItem('glb_node_id', nodeId);
-  document.getElementById('node-panel-title').textContent = 'node: ' + nodeId;
-  document.getElementById('node-panel').classList.add('open');
-  document.getElementById('node-log').innerHTML = '';
-
-  // Show run task
-  if (currentRunTask) {
-    document.getElementById('node-run-task').style.display = 'block';
-    document.getElementById('node-run-task-text').textContent = currentRunTask;
-  } else {
-    document.getElementById('node-run-task').style.display = 'none';
-  }
-
-  // Show node description from DAG
-  const node = dagData && dagData.nodes && dagData.nodes[nodeId];
-  const desc = node && (node.annotation || node.task);
-  if (desc) {
-    document.getElementById('node-description').style.display = 'block';
-    document.getElementById('node-description-text').textContent = desc;
-  } else {
-    document.getElementById('node-description').style.display = 'none';
-  }
-
-  // Show error if present
-  const errBox = document.getElementById('node-error-box');
-  const errMsg = nodeErrors[nodeId];
-  if (errMsg) {
-    errBox.style.display = 'block';
-    errBox.textContent = '✗ Erro:\n' + errMsg;
-  } else {
-    errBox.style.display = 'none';
-  }
-
+// stop-run event from the DAG header button
+window.addEventListener('stop-run', async () => {
+  const runId = Alpine.store('session').runId;
+  if (!runId) return;
   try {
-    const res = await fetch(`/api/runs/${runId}/nodes/${nodeId}/log`);
-    const entries = await res.json();
-    (entries || []).forEach(appendLogEntry);
+    await fetch(`/api/runs/${runId}/stop`, { method: 'POST' });
   } catch(_) {}
-}
+});
 
-function closeNodePanel() {
-  document.getElementById('node-panel').classList.remove('open');
-  currentNodeId = null;
-  localStorage.removeItem('glb_node_id');
-}
-
-document.getElementById('node-panel-close').onclick = closeNodePanel;
-
-function appendLogEntry(entry) {
-  const log = document.getElementById('node-log');
-  const el = document.createElement('div');
-  el.className = 'log-entry';
-  const ts = entry.ts ? new Date(entry.ts).toLocaleTimeString() : '';
-  const paramsText = entry.params ? escHtml(entry.params) : escHtml(entry.action);
-  el.innerHTML = `<div class="log-entry-header">iter ${entry.iter} — ${escHtml(entry.action)} <span style="float:right">${ts}</span></div>`
-    + `<div class="log-params">▶ ${paramsText}</div>`
-    + `<div class="log-obs">◀ ${escHtml(entry.obs)}</div>`;
-  log.appendChild(el);
-  log.scrollTop = log.scrollHeight;
-}
-
-function escHtml(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-// ── Checkpoint dialog ─────────────────────────────────────
-function openCheckpointDialog(runId, nodeId, annotation) {
-  pendingCheckpoint = {runId, nodeId};
-  document.getElementById('cp-title').textContent = `Checkpoint: ${nodeId}`;
-  document.getElementById('cp-desc').textContent = annotation;
-  document.getElementById('cp-reason').value = '';
-  document.getElementById('checkpoint-dialog').style.display = 'block';
-  document.getElementById('overlay').style.display = 'block';
-}
-function closeCheckpointDialog() {
-  document.getElementById('checkpoint-dialog').style.display = 'none';
-  document.getElementById('overlay').style.display = 'none';
-  pendingCheckpoint = null;
-}
-document.getElementById('overlay').onclick = closeCheckpointDialog;
-document.getElementById('cp-approve').onclick = async () => {
-  if (!pendingCheckpoint) return;
-  const {runId, nodeId} = pendingCheckpoint;
-  closeCheckpointDialog();
-  await fetch(`/api/runs/${runId}/approve/${nodeId}`, {method:'POST'});
-  addMsg(`Aprovado: ${nodeId}`, 'ok');
-};
-document.getElementById('cp-reject').onclick = async () => {
-  if (!pendingCheckpoint) return;
-  const {runId, nodeId} = pendingCheckpoint;
-  const reason = document.getElementById('cp-reason').value.trim() || 'rejeitado pelo usuário';
-  closeCheckpointDialog();
-  await fetch(`/api/runs/${runId}/reject/${nodeId}`, {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({reason}),
-  });
-  addMsg(`Rejeitado: ${nodeId}`, 'err');
-};
-
-// ── DAG rendering ─────────────────────────────────────────
-const canvas = document.getElementById('dag-canvas');
-const tooltip = document.getElementById('canvas-tooltip');
-let clickAreas = [];
-
-function renderDag() {
+// ── Canvas: drawDAG ────────────────────────────────────────
+function drawDAG() {
   const ctx = canvas.getContext('2d');
   canvas.width  = canvas.offsetWidth  || 800;
   canvas.height = canvas.offsetHeight || 600;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  const dagStore = Alpine.store('dag');
+  const dagData  = dagStore.data;
   if (!dagData || !dagData.nodes) return;
 
   const nodes = Object.values(dagData.nodes);
-  if (nodes.length === 0) return;
+  if (!nodes.length) return;
 
   const layers = computeLayers(dagData);
   const layerCount = Object.keys(layers).length;
-  if (layerCount === 0) return;
+  if (!layerCount) return;
 
-  const totalW = canvas.width;
-  const totalH = canvas.height;
-
-  // Compute bounding box of the DAG so we can centre it.
+  const totalW = canvas.width, totalH = canvas.height;
   const dagW = Math.max(...Object.values(layers).map(l => l.length)) * (NODE_W + 40) - 40;
   const dagH = layerCount * (NODE_H + 60) - 60;
   const offsetX = Math.max(0, (totalW - dagW) / 2);
   const offsetY = Math.max(20, (totalH - dagH) / 2);
 
   const positions = {};
-  Object.entries(layers).forEach(([depth, nodeIds]) => {
+  Object.entries(layers).forEach(([depth, ids]) => {
     const d = parseInt(depth);
-    const rowW = nodeIds.length * NODE_W + (nodeIds.length - 1) * 40;
+    const rowW = ids.length * NODE_W + (ids.length - 1) * 40;
     const rowX = offsetX + (dagW - rowW) / 2;
-    const y = offsetY + d * (NODE_H + 60);
-    nodeIds.forEach((id, i) => {
-      positions[id] = {x: rowX + i * (NODE_W + 40), y};
-    });
+    const y    = offsetY + d * (NODE_H + 60);
+    ids.forEach((id, i) => { positions[id] = { x: rowX + i * (NODE_W + 40), y }; });
   });
 
-  // Draw edges
   ctx.strokeStyle = '#334155';
   ctx.lineWidth = 1.5;
   (dagData.edges || []).forEach(([from, to]) => {
@@ -634,28 +703,26 @@ function renderDag() {
     if (!pf || !pt) return;
     const fx = pf.x + NODE_W / 2, fy = pf.y + NODE_H;
     const tx = pt.x + NODE_W / 2, ty = pt.y;
-    const midy = (fy + ty) / 2;
+    const my = (fy + ty) / 2;
     ctx.beginPath();
     ctx.moveTo(fx, fy);
-    ctx.bezierCurveTo(fx, midy, tx, midy, tx, ty);
+    ctx.bezierCurveTo(fx, my, tx, my, tx, ty);
     ctx.stroke();
     ctx.fillStyle = '#334155';
-    arrow(ctx, tx, ty, tx, fy);
+    drawArrow(ctx, tx, ty, tx, fy);
   });
 
   clickAreas = [];
-
   nodes.forEach(n => {
     const p = positions[n.id];
     if (!p) return;
-    const ns = nodeStates[n.id];
-    const state = (typeof ns === 'string' ? ns : (ns && ns.state)) || n.state || 'pending';
-    const bg   = COLORS[state]   || COLORS.pending;
-    const fg   = TEXT_COLORS[state] || TEXT_COLORS.pending;
+    const ns    = dagStore.nodes[n.id] || {};
+    const state = ns.state || n.state || 'pending';
+    const bg    = COLORS[state]      || COLORS.pending;
+    const fg    = TEXT_COLORS[state] || TEXT_COLORS.pending;
 
     if (state === 'waiting_human') {
-      ctx.strokeStyle = '#fb923c';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#fb923c'; ctx.lineWidth = 2;
       ctx.beginPath();
       roundRect(ctx, p.x - 4, p.y - 4, NODE_W + 8, NODE_H + 8, 10);
       ctx.stroke();
@@ -667,31 +734,26 @@ function renderDag() {
     ctx.fill();
 
     ctx.fillStyle = fg;
-    ctx.font = '11px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(truncate(n.id, 18), p.x + NODE_W / 2, p.y + NODE_H / 2 - 8);
+    ctx.font = '11px system-ui,sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(trunc(n.id, 18), p.x + NODE_W / 2, p.y + NODE_H / 2 - 8);
 
-    ctx.font = '9px system-ui, sans-serif';
+    ctx.font = '9px system-ui,sans-serif';
     ctx.fillStyle = fg + 'aa';
-    let subLabel = state;
-    if (state === 'running' && iterCounts[n.id]) {
-      subLabel = `running [${iterCounts[n.id]}/20]`;
-    }
-    ctx.fillText(subLabel, p.x + NODE_W / 2, p.y + NODE_H / 2 + 8);
+    let sub = state;
+    if (state === 'running' && ns.iterCount) sub = `running [${ns.iterCount}/20]`;
+    ctx.fillText(sub, p.x + NODE_W / 2, p.y + NODE_H / 2 + 8);
 
     clickAreas.push({
       x: p.x, y: p.y, w: NODE_W, h: NODE_H,
       nodeId: n.id,
       isCheckpoint: state === 'waiting_human',
       annotation: n.annotation || n.id,
-      fullId: n.id,
-      error: nodeErrors[n.id] || '',
+      error: ns.error || '',
     });
   });
 }
 
-// Canvas click: checkpoint dialog or node log panel
 canvas.addEventListener('click', e => {
   if (!currentRunId) return;
   const rect = canvas.getBoundingClientRect();
@@ -699,30 +761,25 @@ canvas.addEventListener('click', e => {
   for (const a of clickAreas) {
     if (mx >= a.x && mx <= a.x + a.w && my >= a.y && my <= a.y + a.h) {
       if (a.isCheckpoint) {
-        openCheckpointDialog(currentRunId, a.nodeId, a.annotation);
+        window.dispatchEvent(new CustomEvent('sse-checkpoint', {
+          detail: { runId: currentRunId, nodeId: a.nodeId, annotation: a.annotation },
+        }));
       } else {
-        openNodePanel(currentRunId, a.nodeId);
+        window.dispatchEvent(new CustomEvent('node-selected', {
+          detail: { runId: currentRunId, nodeId: a.nodeId },
+        }));
       }
       return;
     }
   }
 });
 
-// Canvas hover: tooltip
 canvas.addEventListener('mousemove', e => {
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-  let found = null;
-  for (const a of clickAreas) {
-    if (mx >= a.x && mx <= a.x + a.w && my >= a.y && my <= a.y + a.h) {
-      found = a;
-      break;
-    }
-  }
+  const found = clickAreas.find(a => mx >= a.x && mx <= a.x + a.w && my >= a.y && my <= a.y + a.h);
   if (found) {
-    let text = found.fullId;
-    if (found.error) text += '\n✗ ' + found.error.slice(0, 80);
-    tooltip.textContent = text;
+    tooltip.textContent = found.nodeId + (found.error ? '\n✗ ' + found.error.slice(0, 80) : '');
     tooltip.style.display = 'block';
     tooltip.style.left = (e.clientX + 14) + 'px';
     tooltip.style.top  = (e.clientY + 14) + 'px';
@@ -733,31 +790,27 @@ canvas.addEventListener('mousemove', e => {
   }
 });
 canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+window.addEventListener('resize', drawDAG);
 
+// ── Canvas helpers ─────────────────────────────────────────
 function computeLayers(dag) {
-  const nodes = dag.nodes || {};
-  const edges = dag.edges || [];
   const depth = {};
-  Object.keys(nodes).forEach(id => depth[id] = 0);
-  edges.forEach(([from, to]) => {
-    depth[to] = Math.max((depth[to] || 0), (depth[from] || 0) + 1);
-  });
-  for (let i = 0; i < Object.keys(nodes).length; i++) {
-    edges.forEach(([from, to]) => {
-      if (depth[from] + 1 > depth[to]) depth[to] = depth[from] + 1;
+  Object.keys(dag.nodes || {}).forEach(id => { depth[id] = 0; });
+  const edges = dag.edges || [];
+  for (let i = 0; i < Object.keys(depth).length; i++) {
+    edges.forEach(([f, t]) => {
+      if ((depth[f] || 0) + 1 > (depth[t] || 0)) depth[t] = depth[f] + 1;
     });
   }
   const layers = {};
   Object.entries(depth).forEach(([id, d]) => {
-    if (!layers[d]) layers[d] = [];
-    layers[d].push(id);
+    (layers[d] = layers[d] || []).push(id);
   });
   return layers;
 }
 
 function roundRect(ctx, x, y, w, h, r) {
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
+  ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
   ctx.quadraticCurveTo(x + w, y, x + w, y + r);
   ctx.lineTo(x + w, y + h - r);
   ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
@@ -768,43 +821,16 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function arrow(ctx, x, y, fromX, fromY) {
-  const angle = Math.atan2(y - fromY, x - fromX);
-  const size = 6;
+function drawArrow(ctx, x, y, fx, fy) {
+  const a = Math.atan2(y - fy, x - fx), s = 6;
   ctx.beginPath();
   ctx.moveTo(x, y);
-  ctx.lineTo(x - size * Math.cos(angle - 0.4), y - size * Math.sin(angle - 0.4));
-  ctx.lineTo(x - size * Math.cos(angle + 0.4), y - size * Math.sin(angle + 0.4));
-  ctx.closePath();
-  ctx.fill();
+  ctx.lineTo(x - s * Math.cos(a - 0.4), y - s * Math.sin(a - 0.4));
+  ctx.lineTo(x - s * Math.cos(a + 0.4), y - s * Math.sin(a + 0.4));
+  ctx.closePath(); ctx.fill();
 }
 
-function truncate(s, n) {
-  return s.length > n ? s.slice(0, n) + '…' : s;
-}
-
-window.addEventListener('resize', renderDag);
-
-// ── localStorage persistence ──────────────────────────────
-window.addEventListener('DOMContentLoaded', async () => {
-  try {
-    const res = await fetch('/api/status');
-    if (res.ok) setStatus(true);
-  } catch(_) { setStatus(false); }
-
-  addMsg('Bem-vindo ao golovebox. Faça upload de arquivos .md ou digite uma tarefa para iniciar.');
-  loadRuns();
-  checkHealth();
-
-  const savedRunId  = localStorage.getItem('glb_run_id');
-  const savedNodeId = localStorage.getItem('glb_node_id');
-  if (savedRunId) {
-    await selectRun(savedRunId);
-    if (savedNodeId) {
-      openNodePanel(savedRunId, savedNodeId);
-    }
-  }
-});
+function trunc(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
 </script>
 </body>
 </html>
