@@ -1,190 +1,182 @@
 {
   "project": "golovebox",
-  "tagline": "Devin + n8n + Temporal, em um binário. Self-hosted, intention-DSL agentic workflow platform.",
-  "vision": "Portable autonomous coding agent that learns from every execution, builds reusable knowledge, and becomes progressively more efficient on the same project — all from a single .exe, zero install, data stays local.",
+  "version": "v3",
+  "tagline": "O TechLead autônomo. Especifica, delega, verifica, comunica e aprende.",
+
+  "vision": "Golovebox não escreve código — ele garante que o código certo seja escrito, pelo agente certo, no momento certo, com o contexto certo. E mantém todo mundo informado.",
+
+  "promotion": {
+    "v0": "Dev — escreve código dentro de uma VM via ReAct loop",
+    "v1": "TechLead — especifica, delega pra CLIs de código, verifica, comunica, aprende",
+    "why": "Claude Code, Codex CLI, Gemini CLI já escrevem código melhor do que qualquer ReAct loop que a gente construa. A lacuna real é orquestração, contexto e comunicação."
+  },
 
   "philosophy": {
     "portable_app": "tudo relativo ao executável, sem exceções",
-    "no_cgo": "zero CGO, portabilidade total, sem MinGW no Windows",
+    "no_cgo": "zero CGO, portabilidade total",
     "self_hosted": "dados locais, sem telemetria, sem lock-in de cloud",
     "zero_cognitive_effort": "init funciona sem nenhum passo manual",
-    "offline_capable": "após o build, zero internet necessária",
-    "md_first_memory": "memória persistida como Markdown antes de vetorizar — portável, legível, transportável entre projetos"
+    "md_first_memory": ".ai/ é a fonte de verdade do projeto — legível, portável, versionável",
+    "orchestrate_dont_implement": "golovebox coordena — CLIs implementam",
+    "bidirectional_ai_folder": "golovebox lê src/ para entender; CLIs escrevem .ai/reports/ para ensinar"
   },
 
-  "v0_definition_of_done": "Copy golovebox.exe to any Windows folder, run golovebox init, open localhost:8080, type a task, watch the DAG execute in the Alpine VM, see the ReAct log in real time, receive the result — without installing anything.",
+  "techlead_model": {
+    "golovebox_owns": ".ai/ — specs, tasks, decisions, context, reports",
+    "cli_owns": "src/, tests/ — implementação efetiva",
+    "golovebox_reads": "src/ para entender antes de especificar e verificar após delegação",
+    "cli_reads": ".ai/specs/ e .ai/CONTEXT.md para implementar com contexto",
+    "cli_writes": ".ai/reports/ após implementação — o que fez, o que encontrou, decisões tomadas",
+    "contract": {
+      "golovebox_entrega": [
+        ".ai/specs/feature-X.md — o quê e por quê",
+        ".ai/CONTEXT.md — contexto do projeto",
+        "branch já criada e repo sincronizado"
+      ],
+      "cli_entrega": [
+        "src/ modificado e funcional",
+        "testes passando",
+        ".ai/reports/feature-X.md — implementação documentada"
+      ]
+    }
+  },
 
-  "v1_definition_of_done": "O agente aprende com cada execução, recupera conhecimento de tasks anteriores, delega para especialistas, documenta o que fez em TASK_ID.md, e fica progressivamente mais eficiente no mesmo projeto — tudo self-hosted, dados locais, zero lock-in.",
+  "ai_folder_convention": {
+    "location": ".ai/ na raiz do repositório",
+    "owner": "golovebox",
+    "structure": {
+      ".ai/CONTEXT.md": "contexto permanente do projeto — stack, padrões, decisões arquiteturais",
+      ".ai/hypercontext.json": "metadados estruturados do projeto",
+      ".ai/DECISIONS.md": "ADR — architecture decision records",
+      ".ai/specs/<feature>.md": "spec escrita pelo golovebox antes de delegar",
+      ".ai/tasks/<TASK_ID>.md": "síntese do golovebox após conclusão — o que foi feito, o que aprendeu",
+      ".ai/reports/<feature>.md": "report do CLI após implementação — o que encontrou, o que decidiu"
+    },
+    "portability": "versionar .ai/ junto com src/ — qualquer dev ou agente que clonar o repo tem o contexto completo",
+    "versionability": ".ai/ é Markdown e JSON — diff legível, merge possível, histórico em git"
+  },
 
-  "v0_status": {
-    "completed": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-    "in_spec": [10, 11],
-    "phase_10": "UI Refactor — Alpine.js substituindo JS imperativo; comportamento idêntico",
-    "phase_11": "Refactor — Canvas2D→Cytoscape, net/http→chi, fmt→slog, marked.js, highlight.js"
+  "react_loop_evolution": {
+    "v0_mode": "escreve código — write_file, shell pra compilar",
+    "v1_mode": "coordena — lê, especifica, delega, verifica, comunica",
+    "v1_thought_pattern": [
+      "lê src/ existente — entende estrutura e padrões",
+      "escreve .ai/specs/feature-X.md — especifica com contexto rico",
+      "delega ao CLI escolhido",
+      "lê .ai/reports/feature-X.md + diff de src/",
+      "verifica contra spec + roda testes",
+      "comunica resultado",
+      "escreve .ai/tasks/TASK_ID.md — síntese e aprendizado"
+    ],
+    "tools_v1": [
+      "read_file (src/ para entender, .ai/ para contexto)",
+      "write_spec (.ai/specs/)",
+      "delegate_code (spawn CLI com contexto)",
+      "verify_implementation (diff vs spec + testes)",
+      "write_task_summary (.ai/tasks/)",
+      "notify_slack",
+      "send_email",
+      "update_ticket (Jira/Linear/GitHub Issues)",
+      "schedule_meeting",
+      "shell (git ops, testes — não código)"
+    ]
+  },
+
+  "coding_agent_interface": {
+    "description": "Abstração sobre CLIs de código — golovebox não sabe qual CLI está rodando",
+    "interface": "CodingAgent { Delegate(ctx, spec, repoPath) (output string, err error) }",
+    "adapters": ["ClaudeCodeAgent", "CodexAgent", "GeminiCLIAgent"],
+    "config": "configurável por projeto ou por task type em config.toml [agents]",
+    "context_passing": "golovebox passa .ai/specs/feature.md + .ai/CONTEXT.md para o CLI via stdin ou arquivo",
+    "report_reading": "golovebox lê .ai/reports/feature.md gerado pelo CLI após execução"
+  },
+
+  "v0_stays": {
+    "summary": "V0 completo — fases 1-13. Base sólida que o V1 constrói em cima.",
+    "kept": [
+      "DAG orchestrator — coração do produto",
+      "Web UI (Alpine + Cytoscape)",
+      "DSL (NEW BRANCH, PUSH, PR, ATTENTION_HERE, RUN_TEST)",
+      "VM sandbox — workspace isolado onde os CLIs rodam",
+      "GitHub integration",
+      "Telegram gateway",
+      "SSH/SFTP para leitura de src/ e escrita de .ai/",
+      "chi + slog + embed.FS"
+    ],
+    "repurposed": {
+      "shell_tool": "de 'escrever código' para 'git ops + testes'",
+      "write_file_tool": "de 'escrever src/' para 'escrever .ai/specs/'",
+      "react_loop": "de 'Dev implementando' para 'TechLead coordenando'"
+    }
   },
 
   "v1_roadmap": {
     "v1_fase1": {
-      "name": "Workflow Protocol",
-      "goal": "Padronizar o fluxo de trabalho do agente",
+      "name": "CLI Delegation",
+      "goal": "Golovebox para de escrever código. CLIs assumem a implementação.",
       "features": [
-        "branch-per-task: toda task cria branch, abre PR ao final",
-        "TASK_ID.md gerado ao final de cada execução com observações, decisões e débitos",
-        "lifecycle hooks: global_prompt, pre_step, post_step, pre_code, post_code",
-        "hierarchy de contexto: global → hypercontext → version → phase → task",
-        "workflow.toml: configuração do protocolo por projeto"
-      ],
-      "analogy": "o que fazemos manualmente com FASE_N.md e hypercontext.json, o agente faz automaticamente"
+        "CodingAgent interface — swap trivial entre Claude Code, Codex, Gemini",
+        "delegate_code tool — spawn do CLI com contexto .ai/",
+        "verify_implementation tool — diff vs spec + testes",
+        ".ai/ folder convention implementada",
+        "write_spec tool — golovebox escreve .ai/specs/ antes de delegar",
+        "VM cloud-init instala CLI configurado",
+        "ReAct system prompt reorientado: TechLead, não Dev"
+      ]
     },
     "v1_fase2": {
-      "name": "Memory Architecture",
-      "goal": "Hierarquia de memória MD-first, portável entre projetos",
-      "memory_layers": {
-        "L1_working": "contexto da sessão atual, in-flight, context window",
-        "L2_episodic": "TASK_ID.md — o que aconteceu, o que funcionou, o que falhou",
-        "L3_semantic": "vetores chromem-go derivados dos MD (fonte de verdade é o MD)",
-        "L4_hypercontext": "projeto inteiro — stack, decisões, filosofia, sempre injetado"
-      },
-      "portability": "cp -r .golovebox/memory/ /outro-projeto/ — chromem-go reconstrói vetores do MD",
-      "context_hierarchy": {
-        "global": ".golovebox/prompts/global.md — injetado em todo LLM call",
-        "hypercontext": ".golovebox/hypercontext.json — projeto inteiro",
-        "version": ".golovebox/context/vN.md — contexto da versão atual",
-        "phase": "FASE_N.md — fase em andamento",
-        "task": "TASK_ID.md — gerado ao final de cada execução"
-      }
+      "name": "Project Memory",
+      "goal": ".ai/ como memória viva e portável do projeto",
+      "features": [
+        ".ai/ gerado e mantido automaticamente a cada run",
+        "CONTEXT.md atualizado conforme projeto evolui",
+        "DECISIONS.md populado com ADRs gerados pelo golovebox",
+        "Hierarquia: global → projeto → versão → task",
+        "Vector search sobre .ai/ — recupera contexto relevante antes de cada spec",
+        "Portabilidade: clonar o repo = ter o contexto completo"
+      ]
     },
     "v1_fase3": {
-      "name": "Learning Loop",
-      "goal": "Agente aprende e melhora com cada execução",
-      "flow": [
-        "executar task",
-        "reflection step: LLM avalia o que funcionou, o que falhou, por quê",
-        "abstração: esse padrão aparece 2+ vezes? propor skill",
-        "skill criada → TOML frontmatter + prompt body → vetorizada",
-        "próxima task similar → skill recuperada e injetada no prompt"
-      ],
-      "trigger": "mesmo pattern de tools usado 2+ vezes numa sessão → propõe skill ao usuário",
-      "storage": ".golovebox/memory/episodic/TASK_ID.md + .golovebox/skills/ (aprendidas automaticamente)"
+      "name": "Communication Layer",
+      "goal": "Golovebox mantém todos informados sem esforço manual",
+      "features": [
+        "Slack — notifica time ao iniciar, ao concluir, ao bloquear",
+        "Email — relatórios, updates para cliente, summaries",
+        "Calendário — agenda demos, code reviews, testes com QA",
+        "Templates de comunicação por tipo de evento",
+        "Tools: notify_slack, send_email, schedule_meeting"
+      ]
     },
     "v1_fase4": {
-      "name": "Multi-agent",
-      "goal": "Principal + especialistas, não swarm",
-      "architecture": {
-        "orchestrator": "lê hypercontext, planeja, delega, agrega — não executa código",
-        "code_agent": "escreve código, entende padrões do repo, memória isolada por domínio",
-        "test_agent": "escreve e roda testes, interpreta cobertura, sugere melhorias",
-        "git_agent": "branch, commit, PR, rebase — especializado em operações Git",
-        "review_agent": "lê código, aponta problemas, sugere refactor — sem executar"
-      },
-      "communication": "mensagem + contexto compartilhado via L4_hypercontext — sem estado compartilhado",
-      "why_not_swarm": "hierarquia clara, principal controla, especialistas executam — previsível e debugável"
+      "name": "PM Integration",
+      "goal": "Golovebox lê e atualiza onde o trabalho é rastreado",
+      "features": [
+        "GitHub Issues → input de task (pull issue, entende contexto)",
+        "Jira / Linear — lê ticket, atualiza status conforme DAG avança",
+        "PR linkado ao ticket automaticamente",
+        "Sprint reporting — golovebox gera relatório de progresso",
+        "Auto-close ticket quando PR mergeado"
+      ]
+    },
+    "v1_fase5": {
+      "name": "Learning Loop",
+      "goal": "Golovebox fica melhor a cada task",
+      "features": [
+        "Reflection pós-task: spec estava boa? CLI precisou de mais contexto?",
+        "Spec templates que evoluem com aprendizado",
+        "Lê .ai/reports/ para entender padrões do projeto",
+        "Sabe qual CLI performa melhor para qual tipo de task no projeto",
+        "Sugere melhorias no CONTEXT.md com base no histórico"
+      ]
     }
   },
 
-  "core_architecture": {
-    "sandbox": {
-      "technology": "QEMU Alpine Linux",
-      "why": "único sandbox cross-platform real — Linux/Mac/Windows",
-      "host_vm_exec": "SSH localhost:2222",
-      "host_vm_files": "SFTP",
-      "host_vm_control": "QMP TCP localhost:4444",
-      "vm_image": "Alpine NoCloud cloud qcow2 — boot direto, sem install step",
-      "silent_boot": "stdout→vm/qemu.log, stdin→os.DevNull — terminal do host intocado"
-    },
-    "agent_loop": {
-      "pattern": "ReAct — Thought/Action/Parameters/Observation em texto puro",
-      "why_text_not_tool_use": "portável entre todos os LLM providers sem depender de features específicas",
-      "max_iterations": 20,
-      "progress_visibility": "ProgressFunc(iter, action, params, obs) → NodeLog .jsonl → SSE → web UI"
-    },
-    "dag_execution": {
-      "node_types": ["task", "checkpoint", "gate", "notify", "try_else", "wait_event"],
-      "parallelism": "max 3 nodes simultâneos",
-      "persistence": "dag.json + node_states.json — resumable após crash",
-      "live_updates": "SSE stream /api/runs/{id}/stream — state_change + node_log events"
-    },
-    "web_ui": {
-      "primary_interface": true,
-      "stack": "Alpine.js + Cytoscape.js + chi + slog + marked + highlight — todos CDN ou stdlib",
-      "dag_visualization": "Cytoscape — live update via .data(), sem re-render do grafo",
-      "why_not_mermaid": "re-renderiza SVG inteiro; Cytoscape atualiza node individual via .data()",
-      "why_alpine_not_htmx": "backend retorna JSON, não HTML fragments; Alpine é natural para JSON + SSE",
-      "session_persistence": "localStorage — run ativo e node selecionado sobrevivem reload"
-    }
+  "product_category": "AI TechLead — categoria que não existe ainda",
+  "competitive_frame": {
+    "coding_agents": "Claude Code, Devin, Codex — escrevem código bem, não orquestram",
+    "workflow_tools": "n8n, Zapier — automatizam fluxos, não entendem código",
+    "golovebox": "entende código o suficiente para especificar e verificar; orquestra todo o resto"
   },
 
-  "key_decisions": {
-    "no_cgo": "sem MinGW no Windows, binário realmente portable",
-    "no_llm_sdk": "HTTP client próprio — zero provider lock-in, BaseURL swappable",
-    "no_virtio_fs": "suporte ruim em host Windows — SFTP via SSH já existente",
-    "no_prebuilt_vm": "Alpine NoCloud via cloud-init usa fonte oficial, sem imagem customizada",
-    "no_temporal": "infraestrutura pesada, vai contra filosofia portable",
-    "no_docker": "um dos pilares do produto — zero Docker, zero Python, zero Node no host",
-    "mage_not_make": "build system em Go puro, sem dependência de shell ou Makefile",
-    "weilnetz_installer": "único source confiável de QEMU Windows com todas as DLLs incluídas",
-    "md_first_memory": "MD é fonte de verdade, vetores são derivados — portabilidade e legibilidade garantidas",
-    "flat_qemu_layout": "weilnetz extrai estrutura flat — QEMUExePath consistente em todos os OSes"
-  },
-
-  "project_structure_overview": {
-    "cmd/golovebox/main.go": "CLI entrypoint — todos os cobra commands",
-    "magefile.go": "build pipeline — fetch, build, check, clean",
-    "internal/agent/": "ReAct loop, planner, tool registry, ProgressFunc",
-    "internal/config/": "portable paths relativos ao executável",
-    "internal/dag/": "DAG types, Executor paralelo, CheckpointManager",
-    "internal/dsl/": "spec keyword parser — ATTENTION_HERE, RUN_TEST, etc.",
-    "internal/embed/": "go:embed assets + extract/keygen/cloudinit",
-    "internal/gateway/": "Handler interface, Gateway router, TelegramHandler",
-    "internal/llm/": "HTTP client OpenAI-compat + retry exponential backoff",
-    "internal/memory/": "chromem-go wrapper — coleção isolada por agente",
-    "internal/orchestrator/": "specs → DAG via LLM (JSON plan com IDs snake_case descritivos)",
-    "internal/sandbox/": "qemu.go, qmp.go, ssh.go, pool.go",
-    "internal/setup/": "7-step init wizard — config primeiro, depois extract/boot",
-    "internal/skills/": "registry local + LLM generator",
-    "internal/tools/": "shell, files, github (GIT_ASKPASS com UUID)",
-    "internal/web/": "chi server, SSE broker, NodeLog, RunStore, embedded UI"
-  },
-
-  "runtime_layout": {
-    ".golovebox/config.toml": "LLM provider, tokens, ports",
-    ".golovebox/qemu/": "flat: qemu-system-x86_64.exe + *.dll + share/qemu/",
-    ".golovebox/vm/base.img": "Alpine cloud qcow2 (~164MB)",
-    ".golovebox/vm/qemu.log": "serial console da VM — stdout/stderr do QEMU",
-    ".golovebox/memory/": "chromem-go vector store",
-    ".golovebox/skills/": "skill .md files com frontmatter TOML",
-    ".golovebox/runs/<id>/": "dag.json + node_states.json + task.txt + logs/<node>.jsonl + artifacts/"
-  },
-
-  "intention_dsl": {
-    "description": "Plain-language Markdown with optional uppercase keywords",
-    "keywords": {
-      "ATTENTION_HERE": "pauses graph, awaits human review (orange node in canvas)",
-      "PAUSE_TO_REVIEW": "alias for ATTENTION_HERE",
-      "NOTIFY_ME": "sends notification, continues execution",
-      "NOT_TODO": "logged to tech_debt.md, excluded from DAG",
-      "RUN_TEST": "gate node — only advances if tests pass",
-      "TRY ... OR_ELSE ...": "try/fallback node",
-      "WHEN ... DO ...": "wait-for-event node"
-    }
-  },
-
-  "out_of_scope_v0": [
-    "parallel multi-agent",
-    "VS Code Server",
-    "Linux/macOS production-tested",
-    "auto-update",
-    "Windows Defender signing",
-    "CDN assets embedded offline (mitigação futura: embed.FS)"
-  ],
-
-  "out_of_scope_v1": [
-    "Windows Defender signing",
-    "auto-update",
-    "ClaWHub remote skill registry",
-    "Jira / Linear / Notion integrations",
-    "multi-tenant",
-    "mobile UI",
-    "WASM sandbox (só roda WASM, não git/gcc/npm arbitrários)"
-  ]
+  "v1_done_definition": "Abrir uma issue no Jira, golovebox lê, escreve a spec em .ai/specs/, delega ao Claude Code, Claude Code implementa e documenta em .ai/reports/, golovebox verifica, push, PR, atualiza o Jira, manda Slack pro time e email pro cliente — sem tocar em uma linha de código."
 }
