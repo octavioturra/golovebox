@@ -1,5 +1,11 @@
 # CLAUDE.md — golovebox
 
+## Claude Code
+
+Ao final do desenvolvimento de um prompt de fase, criar um arquivo ./.ai/FASE_{n}.md
+
+Arquivos de interesse, histórico e contexto estão na pasta ./.ai
+
 ## Projeto
 Agente autônomo de código e comunicação em Go.
 Portable app Windows-first, binário único, zero instalação.

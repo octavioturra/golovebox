@@ -1,0 +1,1 @@
+Run 'mage fetch' to populate this directory with real QEMU binaries.

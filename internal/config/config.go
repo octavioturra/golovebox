@@ -81,6 +81,22 @@ func (c *Config) LogsDir() (string, error) {
 	return filepath.Join(bd, "logs"), nil
 }
 
+func (c *Config) RunsDir() (string, error) {
+	bd, err := BaseDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(bd, "runs"), nil
+}
+
+func (c *Config) SkillsDir() (string, error) {
+	bd, err := BaseDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(bd, "skills"), nil
+}
+
 func Load() (*Config, error) {
 	cfg := &Config{
 		SSHPort: 2222,

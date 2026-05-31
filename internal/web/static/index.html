@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>golovebox</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:100vh;overflow:hidden}
+#app{display:flex;height:100vh}
+/* Chat */
+#chat{width:380px;min-width:280px;display:flex;flex-direction:column;border-right:1px solid #1e293b;background:#1e293b}
+#chat-header{padding:12px 16px;border-bottom:1px solid #334155;display:flex;align-items:center;gap:8px}
+#chat-header h1{font-size:1rem;font-weight:600;color:#f8fafc}
+#status-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;flex-shrink:0}
+#status-dot.red{background:#ef4444}
+#messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+.msg{padding:8px 12px;border-radius:8px;font-size:0.8rem;line-height:1.4}
+.msg.system{background:#0f172a;color:#94a3b8}
+.msg.user{background:#1d4ed8;color:#fff;align-self:flex-end}
+.msg.agent{background:#1e3a5f;color:#bfdbfe}
+.msg.ok{background:#14532d;color:#86efac}
+.msg.err{background:#450a0a;color:#fca5a5}
+.msg.warn{background:#431407;color:#fed7aa}
+#upload-area{padding:12px;border-top:1px solid #334155}
+#upload-area label{display:block;font-size:0.75rem;color:#94a3b8;margin-bottom:6px}
+#spec-input{display:none}
+#drop-zone{border:2px dashed #334155;border-radius:8px;padding:16px;text-align:center;cursor:pointer;font-size:0.8rem;color:#64748b;transition:border-color .2s}
+#drop-zone:hover,#drop-zone.drag{border-color:#3b82f6;color:#93c5fd}
+#file-list{margin-top:6px;font-size:0.75rem;color:#64748b}
+#run-btn{width:100%;margin-top:8px;padding:8px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:500}
+#run-btn:hover{background:#1d4ed8}
+#run-btn:disabled{background:#334155;cursor:not-allowed;color:#64748b}
+/* Runs list */
+#runs-panel{padding:12px;border-top:1px solid #334155}
+#runs-panel h2{font-size:0.75rem;color:#94a3b8;margin-bottom:6px}
+#runs-list{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto}
+.run-item{padding:6px 8px;border-radius:6px;background:#0f172a;cursor:pointer;font-size:0.75rem;display:flex;justify-content:space-between;align-items:center}
+.run-item:hover{background:#1e3a5f}
+.run-item.active{border-left:2px solid #3b82f6}
+.run-badge{padding:2px 6px;border-radius:9999px;font-size:0.65rem;font-weight:600}
+.run-badge.done{background:#14532d;color:#86efac}
+.run-badge.running{background:#78350f;color:#fcd34d}
+.run-badge.error{background:#450a0a;color:#fca5a5}
+/* DAG panel */
+#dag-panel{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#dag-header{padding:10px 16px;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:8px;font-size:0.8rem;color:#94a3b8}
+#current-run-label{font-weight:600;color:#e2e8f0}
+#dag-canvas{flex:1;width:100%;background:#0a0f1e}
+/* Checkpoint dialog */
+#checkpoint-dialog{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;min-width:360px;z-index:100;box-shadow:0 25px 50px rgba(0,0,0,.5)}
+#checkpoint-dialog h3{font-size:0.95rem;margin-bottom:8px;color:#f8fafc}
+#checkpoint-dialog p{font-size:0.8rem;color:#94a3b8;margin-bottom:16px}
+#checkpoint-dialog .btns{display:flex;gap:8px}
+#cp-approve{flex:1;padding:8px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:500}
+#cp-reject{flex:1;padding:8px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:500}
+#cp-reason{width:100%;padding:6px 8px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.8rem;margin-bottom:8px}
+#overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99}
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Left: Chat -->
+  <aside id="chat">
+    <div id="chat-header">
+      <div id="status-dot"></div>
+      <h1>golovebox</h1>
+    </div>
+    <div id="messages"></div>
+    <div id="upload-area">
+      <label>Spec files (.md)</label>
+      <div id="drop-zone" onclick="document.getElementById('spec-input').click()">
+        Clique ou arraste arquivos .md aqui
+      </div>
+      <input type="file" id="spec-input" multiple accept=".md">
+      <div id="file-list"></div>
+      <button id="run-btn" disabled>▶ Executar specs</button>
+    </div>
+    <div id="runs-panel">
+      <h2>Runs anteriores</h2>
+      <div id="runs-list"></div>
+    </div>
+  </aside>
+
+  <!-- Right: DAG canvas -->
+  <main id="dag-panel">
+    <div id="dag-header">
+      <span>DAG</span>
+      <span id="current-run-label"></span>
+    </div>
+    <canvas id="dag-canvas"></canvas>
+  </main>
+</div>
+
+<!-- Checkpoint approval dialog -->
+<div id="overlay"></div>
+<div id="checkpoint-dialog">
+  <h3 id="cp-title">Checkpoint</h3>
+  <p id="cp-desc"></p>
+  <input id="cp-reason" type="text" placeholder="Motivo da rejeição (opcional)">
+  <div class="btns">
+    <button id="cp-approve">✓ Aprovar</button>
+    <button id="cp-reject">✗ Rejeitar</button>
+  </div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────
+let currentRunId = null;
+let dagData = null;        // {nodes:{}, edges:[]}
+let nodeStates = {};       // nodeID → state string
+let evtSource = null;
+let pendingCheckpoint = null; // {runId, nodeId, annotation}
+let selectedFiles = [];
+
+const NODE_W = 160, NODE_H = 48, H_GAP = 40, V_GAP = 60;
+const COLORS = {
+  pending:       '#4b5563',
+  running:       '#b45309',
+  done:          '#15803d',
+  error:         '#b91c1c',
+  waiting_human: '#c2410c',
+};
+const TEXT_COLORS = {
+  pending:'#d1d5db', running:'#fef3c7', done:'#bbf7d0', error:'#fecaca', waiting_human:'#fed7aa',
+};
+
+// ── UI helpers ────────────────────────────────────────────
+function addMsg(text, cls='system') {
+  const d = document.getElementById('messages');
+  const m = document.createElement('div');
+  m.className = 'msg ' + cls;
+  m.textContent = text;
+  d.appendChild(m);
+  d.scrollTop = d.scrollHeight;
+}
+
+function setStatus(ok) {
+  document.getElementById('status-dot').className = ok ? '' : 'red';
+}
+
+// ── File handling ─────────────────────────────────────────
+const dropZone = document.getElementById('drop-zone');
+const specInput = document.getElementById('spec-input');
+const runBtn   = document.getElementById('run-btn');
+const fileList = document.getElementById('file-list');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag');
+  setFiles([...e.dataTransfer.files]);
+});
+specInput.addEventListener('change', () => setFiles([...specInput.files]));
+
+function setFiles(files) {
+  selectedFiles = files.filter(f => f.name.endsWith('.md'));
+  fileList.textContent = selectedFiles.map(f => f.name).join(', ') || 'Nenhum arquivo .md selecionado';
+  runBtn.disabled = selectedFiles.length === 0;
+}
+
+runBtn.addEventListener('click', startRun);
+
+async function startRun() {
+  if (selectedFiles.length === 0) return;
+  runBtn.disabled = true;
+  addMsg(`Enviando ${selectedFiles.length} spec(s)...`);
+
+  const form = new FormData();
+  selectedFiles.forEach(f => form.append('spec', f, f.name));
+
+  try {
+    const res = await fetch('/api/run', {method:'POST', body:form});
+    if (!res.ok) throw new Error(await res.text());
+    const {run_id} = await res.json();
+    addMsg(`Run iniciada: ${run_id}`, 'ok');
+    selectRun(run_id);
+    loadRuns();
+  } catch(e) {
+    addMsg(`Erro: ${e.message}`, 'err');
+    runBtn.disabled = false;
+  }
+}
+
+// ── Runs list ─────────────────────────────────────────────
+async function loadRuns() {
+  try {
+    const res = await fetch('/api/runs');
+    if (!res.ok) return;
+    const runs = await res.json();
+    const list = document.getElementById('runs-list');
+    list.innerHTML = '';
+    (runs || []).forEach(r => {
+      const el = document.createElement('div');
+      el.className = 'run-item' + (r.id === currentRunId ? ' active' : '');
+      el.innerHTML = `<span>${r.id}</span><span class="run-badge ${r.state}">${r.state}</span>`;
+      el.onclick = () => selectRun(r.id);
+      list.appendChild(el);
+    });
+  } catch(_) {}
+}
+
+async function selectRun(runId) {
+  currentRunId = runId;
+  document.getElementById('current-run-label').textContent = runId;
+
+  // Stop previous SSE
+  if (evtSource) { evtSource.close(); evtSource = null; }
+
+  try {
+    const res = await fetch(`/api/runs/${runId}`);
+    if (!res.ok) throw new Error('run not found');
+    const data = await res.json();
+    dagData = data.dag;
+    nodeStates = data.node_states || {};
+    renderDag();
+  } catch(e) {
+    addMsg(`Erro ao carregar run: ${e.message}`, 'err');
+    return;
+  }
+
+  // Subscribe to SSE
+  evtSource = new EventSource(`/api/runs/${runId}/stream`);
+  evtSource.onmessage = e => {
+    try {
+      const node = JSON.parse(e.data);
+      if (!node.id) return;
+      // Update dagData node
+      if (dagData && dagData.nodes) {
+        Object.assign(dagData.nodes[node.id] || {}, node);
+        dagData.nodes[node.id] = {...(dagData.nodes[node.id] || {}), ...node};
+      }
+      nodeStates[node.id] = node.state;
+      addMsg(`[${node.state}] ${node.id}`, stateClass(node.state));
+      renderDag();
+      if (node.state === 'waiting_human') {
+        openCheckpointDialog(runId, node.id, node.annotation || node.id);
+      }
+    } catch(_) {}
+  };
+  evtSource.onerror = () => setStatus(false);
+  evtSource.onopen  = () => setStatus(true);
+}
+
+function stateClass(s) {
+  switch(s) {
+    case 'done': return 'ok';
+    case 'error': return 'err';
+    case 'waiting_human': return 'warn';
+    default: return 'agent';
+  }
+}
+
+// ── Checkpoint dialog ─────────────────────────────────────
+function openCheckpointDialog(runId, nodeId, annotation) {
+  pendingCheckpoint = {runId, nodeId};
+  document.getElementById('cp-title').textContent = `Checkpoint: ${nodeId}`;
+  document.getElementById('cp-desc').textContent = annotation;
+  document.getElementById('cp-reason').value = '';
+  document.getElementById('checkpoint-dialog').style.display = 'block';
+  document.getElementById('overlay').style.display = 'block';
+}
+function closeCheckpointDialog() {
+  document.getElementById('checkpoint-dialog').style.display = 'none';
+  document.getElementById('overlay').style.display = 'none';
+  pendingCheckpoint = null;
+}
+document.getElementById('overlay').onclick = closeCheckpointDialog;
+document.getElementById('cp-approve').onclick = async () => {
+  if (!pendingCheckpoint) return;
+  const {runId, nodeId} = pendingCheckpoint;
+  closeCheckpointDialog();
+  await fetch(`/api/runs/${runId}/approve/${nodeId}`, {method:'POST'});
+  addMsg(`Aprovado: ${nodeId}`, 'ok');
+};
+document.getElementById('cp-reject').onclick = async () => {
+  if (!pendingCheckpoint) return;
+  const {runId, nodeId} = pendingCheckpoint;
+  const reason = document.getElementById('cp-reason').value.trim() || 'rejeitado pelo usuário';
+  closeCheckpointDialog();
+  await fetch(`/api/runs/${runId}/reject/${nodeId}`, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({reason}),
+  });
+  addMsg(`Rejeitado: ${nodeId}`, 'err');
+};
+
+// ── DAG rendering ─────────────────────────────────────────
+function renderDag() {
+  const canvas = document.getElementById('dag-canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width  = canvas.offsetWidth  || 800;
+  canvas.height = canvas.offsetHeight || 600;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!dagData || !dagData.nodes) return;
+
+  const nodes = Object.values(dagData.nodes);
+  if (nodes.length === 0) return;
+
+  // Topological layer assignment
+  const layers = computeLayers(dagData);
+  const layerCount = Object.keys(layers).length;
+  if (layerCount === 0) return;
+
+  const maxNodesInLayer = Math.max(...Object.values(layers).map(l => l.length));
+  const totalW = canvas.width;
+  const totalH = canvas.height;
+  const layerH = Math.min((totalH - 40) / layerCount, NODE_H + V_GAP + 20);
+  const positions = {}; // nodeID → {x, y}
+
+  Object.entries(layers).forEach(([depth, nodeIds]) => {
+    const d = parseInt(depth);
+    const y = 20 + d * layerH + (layerH - NODE_H) / 2;
+    nodeIds.forEach((id, i) => {
+      const slotW = totalW / nodeIds.length;
+      const x = slotW * i + (slotW - NODE_W) / 2;
+      positions[id] = {x, y};
+    });
+  });
+
+  // Draw edges
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 1.5;
+  (dagData.edges || []).forEach(([from, to]) => {
+    const pf = positions[from], pt = positions[to];
+    if (!pf || !pt) return;
+    const fx = pf.x + NODE_W / 2, fy = pf.y + NODE_H;
+    const tx = pt.x + NODE_W / 2, ty = pt.y;
+    const midy = (fy + ty) / 2;
+    ctx.beginPath();
+    ctx.moveTo(fx, fy);
+    ctx.bezierCurveTo(fx, midy, tx, midy, tx, ty);
+    ctx.stroke();
+    // Arrowhead
+    ctx.fillStyle = '#334155';
+    arrow(ctx, tx, ty, tx, fy);
+  });
+
+  // Draw nodes
+  nodes.forEach(n => {
+    const p = positions[n.id];
+    if (!p) return;
+    const state = (dagData.nodes[n.id] && dagData.nodes[n.id].state) || n.state || 'pending';
+    const bg   = COLORS[state]   || COLORS.pending;
+    const fg   = TEXT_COLORS[state] || TEXT_COLORS.pending;
+
+    // Pulsing ring for waiting_human
+    if (state === 'waiting_human') {
+      ctx.strokeStyle = '#fb923c';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      roundRect(ctx, p.x - 4, p.y - 4, NODE_W + 8, NODE_H + 8, 10);
+      ctx.stroke();
+    }
+
+    // Node body
+    ctx.fillStyle = bg;
+    ctx.beginPath();
+    roundRect(ctx, p.x, p.y, NODE_W, NODE_H, 8);
+    ctx.fill();
+
+    // Node text
+    ctx.fillStyle = fg;
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const label = truncate(n.id, 18);
+    ctx.fillText(label, p.x + NODE_W / 2, p.y + NODE_H / 2 - 8);
+    ctx.font = '9px system-ui, sans-serif';
+    ctx.fillStyle = fg + 'aa';
+    ctx.fillText(state, p.x + NODE_W / 2, p.y + NODE_H / 2 + 8);
+
+    // Click on waiting_human opens dialog
+    if (state === 'waiting_human') {
+      canvas._checkpointAreas = canvas._checkpointAreas || [];
+      canvas._checkpointAreas.push({x:p.x, y:p.y, w:NODE_W, h:NODE_H, nodeId:n.id, annotation:n.annotation||n.id});
+    }
+  });
+}
+
+canvas.addEventListener('click', e => {
+  if (!currentRunId) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  (canvas._checkpointAreas || []).forEach(a => {
+    if (mx >= a.x && mx <= a.x + a.w && my >= a.y && my <= a.y + a.h) {
+      openCheckpointDialog(currentRunId, a.nodeId, a.annotation);
+    }
+  });
+});
+
+function computeLayers(dag) {
+  const nodes = dag.nodes || {};
+  const edges = dag.edges || [];
+  const depth = {};
+  Object.keys(nodes).forEach(id => depth[id] = 0);
+  // Build adjacency: predecessor → [successors]
+  edges.forEach(([from, to]) => {
+    depth[to] = Math.max((depth[to] || 0), (depth[from] || 0) + 1);
+  });
+  // Multiple passes to propagate depths through long chains
+  for (let i = 0; i < Object.keys(nodes).length; i++) {
+    edges.forEach(([from, to]) => {
+      if (depth[from] + 1 > depth[to]) depth[to] = depth[from] + 1;
+    });
+  }
+  const layers = {};
+  Object.entries(depth).forEach(([id, d]) => {
+    if (!layers[d]) layers[d] = [];
+    layers[d].push(id);
+  });
+  return layers;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function arrow(ctx, x, y, fromX, fromY) {
+  const angle = Math.atan2(y - fromY, x - fromX);
+  const size = 6;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x - size * Math.cos(angle - 0.4), y - size * Math.sin(angle - 0.4));
+  ctx.lineTo(x - size * Math.cos(angle + 0.4), y - size * Math.sin(angle + 0.4));
+  ctx.closePath();
+  ctx.fill();
+}
+
+function truncate(s, n) {
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+// Redraw on resize
+window.addEventListener('resize', renderDag);
+
+// Expose canvas reference for click handler
+const canvas = document.getElementById('dag-canvas');
+
+// ── Init ──────────────────────────────────────────────────
+(async () => {
+  try {
+    const res = await fetch('/api/status');
+    if (res.ok) setStatus(true);
+  } catch(_) { setStatus(false); }
+  addMsg('Bem-vindo ao golovebox. Faça upload de arquivos .md para iniciar uma run.');
+  loadRuns();
+})();
+</script>
+</body>
+</html>
