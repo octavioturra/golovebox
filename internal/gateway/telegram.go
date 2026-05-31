@@ -88,7 +88,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgbotapi.Messa
 	h.send(msg.Chat.ID, fmt.Sprintf("⚙️ Processando issue #%d em %s/%s...", issueNum, owner, repo))
 
 	chatID := msg.Chat.ID
-	progress := func(iter int, action, _, obs string) {
+	progress := func(iter int, action, _, obs, _, _ string) {
 		h.send(chatID, fmt.Sprintf("🔄 [%d/%d] %s: %s", iter, agent.MaxIterations, action, obs))
 	}
 

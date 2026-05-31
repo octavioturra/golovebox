@@ -227,9 +227,9 @@ func (s *Server) launchSingleTask(w http.ResponseWriter, ctx context.Context, ru
 			delete(s.activeRuns, runID)
 			s.mu.Unlock()
 		}()
-		_, _ = s.gw.RunSpecTask(runCtx, task, func(iter int, action, params, obs string) {
-			nodelog.Append(iter, action, params, obs)
-			s.broadcastNodeLog(runID, nodeID, NodeLogEntry{iter, action, params, obs, time.Now()})
+		_, _ = s.gw.RunSpecTask(runCtx, task, func(iter int, action, params, obs, prompt, reply string) {
+			nodelog.Append(iter, action, params, obs, prompt, reply)
+			s.broadcastNodeLog(runID, nodeID, NodeLogEntry{iter, action, params, obs, prompt, reply, time.Now()})
 			_ = appendFile(filepath.Join(runDir, "logs", nodeID+".log"),
 				fmt.Sprintf("[%d] %s: %s\n", iter, action, obs))
 		})
@@ -323,9 +323,9 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 		// Default: run through the agent loop.
 		nodelog := s.store.NodeLogFor(runID, node.ID)
 		logPath := filepath.Join(runDir, "logs", node.ID+".log")
-		return s.gw.RunSpecTask(dCtx, node.Task, func(iter int, action, params, obs string) {
-			nodelog.Append(iter, action, params, obs)
-			s.broadcastNodeLog(runID, node.ID, NodeLogEntry{iter, action, params, obs, time.Now()})
+		return s.gw.RunSpecTask(dCtx, node.Task, func(iter int, action, params, obs, prompt, reply string) {
+			nodelog.Append(iter, action, params, obs, prompt, reply)
+			s.broadcastNodeLog(runID, node.ID, NodeLogEntry{iter, action, params, obs, prompt, reply, time.Now()})
 			_ = appendFile(logPath, fmt.Sprintf("[%d] %s: %s\n", iter, action, obs))
 		})
 	}
@@ -377,9 +377,10 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(statesData, &nodeStates)
 
 	writeJSON(w, map[string]any{
-		"dag":         dagJSON,
-		"node_states": nodeStates,
-		"task":        s.store.ReadTask(runID),
+		"dag":            dagJSON,
+		"node_states":    nodeStates,
+		"task":           s.store.ReadTask(runID),
+		"current_branch": s.store.GetRunMeta(runID, "current_branch"),
 	})
 }
 
@@ -485,7 +486,7 @@ type healthResult struct {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
 	type result struct {
@@ -634,6 +635,8 @@ func (s *Server) broadcastNodeLog(runID, nodeID string, entry NodeLogEntry) {
 		"action":  entry.Action,
 		"params":  entry.Params,
 		"obs":     entry.Observation,
+		"prompt":  entry.Prompt,
+		"reply":   entry.Reply,
 		"ts":      entry.Timestamp,
 	})
 	s.broadcast(runID, string(data))

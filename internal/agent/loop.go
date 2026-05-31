@@ -33,7 +33,10 @@ Parameters:
 
 // ProgressFunc is called after each tool execution to report loop progress.
 // Nil is accepted — callers that don't need progress updates pass nil.
-type ProgressFunc func(iteration int, action, params, observation string)
+// `prompt` is the user-role message sent to the LLM at this iteration (full
+// systemPrompt+task on the first iter, observation-only on subsequent iters).
+// `reply` is the raw LLM response before parseAction extracts action/params.
+type ProgressFunc func(iteration int, action, params, observation, prompt, reply string)
 
 type Loop struct {
 	llm      *llm.Client
@@ -59,6 +62,11 @@ func (l *Loop) Run(ctx context.Context, task string, progress ProgressFunc) (str
 	}
 
 	for i := range MaxIterations {
+		lastPrompt := ""
+		if n := len(messages); n > 0 {
+			lastPrompt = messages[n-1].Content
+		}
+
 		reply, err := l.llm.Complete(ctx, messages)
 		if err != nil {
 			return "", fmt.Errorf("llm complete (iter %d): %w", i, err)
@@ -96,7 +104,7 @@ func (l *Loop) Run(ctx context.Context, task string, progress ProgressFunc) (str
 			if len(obs) > 120 {
 				obs = obs[:120] + "..."
 			}
-			progress(i+1, action, formatParams(params), obs)
+			progress(i+1, action, formatParams(params), obs, lastPrompt, reply)
 		}
 
 		messages = appendObservation(messages, reply, observation)

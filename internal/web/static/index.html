@@ -93,6 +93,12 @@ body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:10
 .log-obs{color:#a3e635;overflow-x:auto}
 /* hljs inside log-obs: override light colors to match dark theme */
 .log-obs .hljs{background:transparent;color:#a3e635;padding:0}
+.log-toggle{cursor:pointer;color:#64748b;font-size:0.7rem;margin:2px 0;user-select:none;display:flex;align-items:center;gap:4px}
+.log-toggle:hover{color:#94a3b8}
+.log-block{background:#020617;border-radius:4px;padding:6px 8px;margin:2px 0 6px;font-family:monospace;font-size:0.7rem;white-space:pre-wrap;word-break:break-word;max-height:240px;overflow-y:auto;color:#cbd5e1;border-left:2px solid #1e293b}
+.log-block.prompt{border-left-color:#3b82f6}
+.log-block.reply{border-left-color:#a3e635}
+.np-branch{color:#fcd34d;font-family:monospace;font-size:0.72rem}
 /* Bottom panel: terminal + file explorer */
 #bottom-panel{border-top:1px solid #1e293b;display:flex;flex-direction:column;height:260px;min-height:0;background:#0d1117}
 .bottom-tabs{display:flex;align-items:center;padding:0 8px;border-bottom:1px solid #1e293b;height:32px;flex-shrink:0}
@@ -185,7 +191,10 @@ document.addEventListener('alpine:init', () => {
       if (this.loading || this.checks[key].ok === null) return '#9ca3af';
       return this.checks[key].ok ? '#34d399' : '#f87171';
     },
-    init() { this.check(); },
+    init() {
+      this.check();
+      setInterval(() => this.check(), 5000);
+    },
   }));
 
   // ── chatPanel ────────────────────────────────────────────
@@ -355,6 +364,11 @@ document.addEventListener('alpine:init', () => {
     runTask:  '',
     nodeDesc: '',
     nodeError:'',
+    branch:   '',
+    expanded: {},
+
+    toggle(key) { this.expanded = { ...this.expanded, [key]: !this.expanded[key] }; },
+    isOpen(key) { return !!this.expanded[key]; },
 
     obsHtml(e) {
       const text = e.obs || '';
@@ -373,6 +387,8 @@ document.addEventListener('alpine:init', () => {
       this.runTask = '';
       this.nodeDesc= '';
       this.nodeError = '';
+      this.branch    = '';
+      this.expanded  = {};
       localStorage.setItem('glb_node_id', nodeId);
 
       try {
@@ -382,6 +398,7 @@ document.addEventListener('alpine:init', () => {
         ]);
         this.entries  = logData || [];
         this.runTask  = runData.task || '';
+        this.branch   = runData.current_branch || '';
         const dagStore = Alpine.store('dag');
         const node = dagStore.data && dagStore.data.nodes && dagStore.data.nodes[nodeId];
         this.nodeDesc  = (node && (node.annotation || node.task)) || '';
@@ -455,6 +472,7 @@ document.addEventListener('alpine:init', () => {
     ws:         null,
     fitAddon:   null,
     _resizeObs: null,
+    _retried:   false,
 
     mount() {
       this.term = new Terminal({
@@ -468,15 +486,7 @@ document.addEventListener('alpine:init', () => {
       const container = document.getElementById('terminal-container');
       this.term.open(container);
       this.fitAddon.fit();
-
-      this.ws = new WebSocket(`ws://${location.host}/ws/terminal`);
-      this.ws.binaryType = 'arraybuffer';
-
-      this.ws.onopen    = () => this.term.write('\r\n\x1b[32m● conectado à VM\x1b[0m\r\n');
-      this.ws.onmessage = (e) => this.term.write(new Uint8Array(e.data));
-      this.ws.onclose   = () => this.term.write('\r\n\x1b[31m● desconectado\x1b[0m\r\n');
-      this.ws.onerror   = () => this.term.write('\r\n\x1b[31m● erro de conexão\x1b[0m\r\n');
-
+      this._connect();
       this.term.onData((data) => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN)
           this.ws.send(data);
@@ -489,6 +499,28 @@ document.addEventListener('alpine:init', () => {
           this.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
       });
       this._resizeObs.observe(container);
+    },
+
+    _connect() {
+      const openedAt = Date.now();
+      this.ws = new WebSocket(`ws://${location.host}/ws/terminal`);
+      this.ws.binaryType = 'arraybuffer';
+      this.ws.onopen    = () => {
+        this._retried = false;
+        this.term.write('\r\n\x1b[32m● conectado à VM\x1b[0m\r\n');
+      };
+      this.ws.onmessage = (e) => this.term.write(new Uint8Array(e.data));
+      this.ws.onclose   = () => {
+        const elapsed = Date.now() - openedAt;
+        if (elapsed < 2000 && !this._retried) {
+          this._retried = true;
+          this.term.write('\r\n\x1b[33m● reconectando...\x1b[0m\r\n');
+          setTimeout(() => this._connect(), 500);
+          return;
+        }
+        this.term.write('\r\n\x1b[31m● desconectado\x1b[0m\r\n');
+      };
+      this.ws.onerror = () => this.term.write('\r\n\x1b[31m● erro de conexão\x1b[0m\r\n');
     },
 
     destroy() {
@@ -751,6 +783,10 @@ document.addEventListener('alpine:init', () => {
           <strong>Descrição do node:</strong>
           <span class="np-meta-val" x-text="nodeDesc"></span>
         </div>
+        <div x-show="branch" style="margin-top:6px">
+          <strong>Branch:</strong>
+          <span class="np-branch" x-text="branch"></span>
+        </div>
       </div>
 
       <div class="np-error" x-show="nodeError" x-text="'✗ Erro:\n' + nodeError"></div>
@@ -762,6 +798,24 @@ document.addEventListener('alpine:init', () => {
               <span x-text="'iter ' + e.iter + ' — ' + e.action"></span>
               <span x-text="fmtTime(e.ts)"></span>
             </div>
+            <template x-if="e.prompt">
+              <div>
+                <div class="log-toggle" @click="toggle('p'+i)">
+                  <span x-text="isOpen('p'+i) ? '▼' : '▸'"></span>
+                  <span>Prompt enviado</span>
+                </div>
+                <div class="log-block prompt" x-show="isOpen('p'+i)" x-text="e.prompt"></div>
+              </div>
+            </template>
+            <template x-if="e.reply">
+              <div>
+                <div class="log-toggle" @click="toggle('r'+i)">
+                  <span x-text="isOpen('r'+i) ? '▼' : '▸'"></span>
+                  <span>Resposta do LLM</span>
+                </div>
+                <div class="log-block reply" x-show="isOpen('r'+i)" x-text="e.reply"></div>
+              </div>
+            </template>
             <div class="log-param" x-show="e.params" x-text="'▶ ' + (e.params || e.action)"></div>
             <div class="log-obs"><pre x-html="obsHtml(e)"></pre></div>
           </div>

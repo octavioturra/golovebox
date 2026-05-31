@@ -32,6 +32,17 @@ type FileEntry struct {
 
 // handleTerminal bridges a WebSocket connection to an SSH PTY on the VM.
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
+	// Wait up to ~5s for the VM to be ready before upgrading — avoids the
+	// "conectado → desconectado em 1s" race when the page opens right after boot.
+	for _, d := range []time.Duration{0, 250, 500, 1000, 2000} {
+		if d > 0 {
+			time.Sleep(d * time.Millisecond)
+		}
+		if s.gw.IsVMReady() {
+			break
+		}
+	}
+
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error("ws terminal upgrade", "error", err)
