@@ -3,11 +3,13 @@
 Agentic workflow platform with a self-hosted web UI and VM sandbox. Describe work in plain-language Markdown specs, get a visual DAG execution plan, approve checkpoints in the browser, and receive Pull Requests — all from a **single self-contained Windows binary** with zero installation.
 
 ```
-golovebox init   →   extracts QEMU, installs Alpine VM, generates SSH keys, configures
+golovebox init   →   extracts QEMU, boots Alpine VM, generates SSH keys, configures
 golovebox web    →   opens localhost:8080
 ```
 
 > **Self-contained since Phase 5**: QEMU binaries and a ready-to-boot Alpine cloud image are embedded inside the binary at build time. No manual downloads. No prerequisites beyond the binary itself.
+
+> **V1 direction**: golovebox is being promoted from Dev to TechLead. Instead of writing code itself, it will specify, delegate to coding CLIs (Claude Code, Codex, Gemini CLI), verify the result, and keep everyone informed. See [V1 Roadmap](#v1-roadmap--techlead).
 
 ---
 
@@ -20,16 +22,22 @@ Spec files (.md)
  Orchestrator  (LLM → JSON plan)
       │
       ▼
- DAG Executor  (parallel nodes, up to 3 simultaneous)
-   ┌─────────────────────────────────┐
-   │  task node    → ReAct loop      │
-   │  checkpoint   → wait for human  │  ← orange node in canvas
-   │  gate         → run tests in VM │
-   │  notify       → send alert      │
-   └─────────────────────────────────┘
+ sync_repo  (clone or pull default repo — auto-injected)
       │
       ▼
- run_summary.md  +  PR URLs  +  artifacts
+ DAG Executor  (parallel nodes, up to 3 simultaneous)
+   ┌──────────────────────────────────────┐
+   │  task node    → ReAct loop in VM     │
+   │  checkpoint   → wait for human       │  ← orange node in canvas
+   │  gate         → run tests in VM      │
+   │  branch       → NEW BRANCH           │
+   │  push         → PUSH                 │
+   │  pr           → PR (create/update)   │
+   │  notify       → send alert           │
+   └──────────────────────────────────────┘
+      │
+      ▼
+ .ai/tasks/TASK_ID.md  +  PR URLs  +  artifacts
 ```
 
 Every `shell`, `read_file`, `write_file` call runs inside an **Alpine Linux QEMU VM** via SSH/SFTP. The host machine is never touched.
@@ -44,32 +52,32 @@ Every `shell`, `read_file`, `write_file` call runs inside an **Alpine Linux QEMU
 golovebox init
 ```
 
-This runs a fully automated 7-step setup:
+Fully automated 7-step setup:
 
 | Step | What happens |
 |---|---|
-| 1 | Create `.golovebox/` directory tree |
-| 2 | Interactive wizard: LLM provider, API keys, GitHub token (reuses existing `config.toml` if present — just press Enter) |
-| 3 | Extract embedded QEMU binaries to `.golovebox/qemu/` |
-| 4 | Extract embedded Alpine cloud qcow2 to `.golovebox/vm/base.img` (already a bootable Alpine install — no separate install step needed) |
-| 5 | Generate RSA 4096 SSH key pair in `.golovebox/vm/` |
-| 6 | Build cloud-init CIDATA disk with SSH key + sshd config |
-| 7 | Boot VM — cloud-init applies SSH key and starts sshd on first boot; host SSHs in to run `echo ok` |
+| 1 | Extract embedded QEMU binaries to `.golovebox/qemu/` (flat layout) |
+| 2 | Extract embedded Alpine cloud qcow2 to `.golovebox/vm/base.img` |
+| 3 | Generate RSA 4096 SSH key pair in `.golovebox/vm/` |
+| 4 | Build cloud-init CIDATA ISO with SSH key + sshd drop-in config |
+| 5 | Interactive wizard: LLM provider, API keys, GitHub token, default repo (reuses existing `config.toml` — just press Enter) |
+| 6 | Boot QEMU silently (`stdout → vm/qemu.log`, `stdin → /dev/null`) |
+| 7 | Smoke test: poll SSH until `echo ok` — cloud-init applies on first boot (~1m42s on Windows TCG) |
 
-All steps are idempotent — safe to re-run. To redo only incomplete steps and skip the config wizard:
+All steps are idempotent — safe to re-run. To redo only incomplete steps without the wizard:
 
 ```
 golovebox init --repair
 ```
 
-If you ever need to wipe the VM and re-run cloud-init from scratch (e.g. after changing the cloud-init template):
+To reset the VM:
 
 ```
-golovebox reset            # delete base.img + cidata; keep config + SSH keys
-golovebox reset --hard     # delete everything (config, keys, VM)
+golovebox reset            # delete base.img + cidata.iso; keep config + SSH keys
+golovebox reset --hard     # delete entire .golovebox/ directory
 ```
 
-Both prompt for confirmation; add `-y` to skip the prompt.
+Both prompt for confirmation; add `-y` to skip.
 
 ### 2. Open the web UI
 
@@ -77,55 +85,57 @@ Both prompt for confirmation; add `-y` to skip the prompt.
 golovebox web
 ```
 
-Boots the VM, starts a server on `localhost:8080`, and opens the browser automatically.
+Boots the VM and starts a server on `localhost:8080`.
 
 ```
 golovebox web --addr :9090       # custom port
 golovebox web --timeout 30       # increase VM start timeout (default 15s)
 ```
 
-The UI has two panels:
-- **Left — chat**: upload `.md` spec files and watch live execution logs
-- **Right — DAG canvas**: nodes coloured by state; click orange checkpoints to approve or reject
-
 ### 3. Write a spec file
 
-Create a Markdown file describing the work. Use keywords to annotate special behaviour:
+Create a Markdown file describing the work. Use uppercase keywords to annotate special behaviour:
 
 ```markdown
 # Feature: user authentication
 
+NEW BRANCH feature/jwt-auth
+
 Implement JWT-based login for the /api/auth endpoint.
 
-ATTENTION_HERE: review the token expiry strategy before continuing
 RUN_TEST: go test ./internal/auth/...
+ATTENTION_HERE: review the token expiry strategy with the security team
 
 Add refresh token support.
 
-NOTIFY_ME: send summary when done
+PUSH
+PR "feat: JWT authentication"
+NOTIFY_ME: send summary when merged
 
 NOT_TODO: OAuth2 social login (out of scope for this sprint)
 ```
 
 | Keyword | Effect |
 |---|---|
-| `ATTENTION_HERE:` | Pauses execution — orange node in canvas, click to approve |
-| `PAUSE_TO_REVIEW:` | Same as ATTENTION_HERE |
-| `RUN_TEST:` | Creates a gate node that runs tests in the VM |
-| `NOTIFY_ME:` | Creates a notify node |
-| `NOT_TODO:` | Logged to `tech_debt.md`, excluded from DAG |
-| `TRY ... OR_ELSE ...` | Creates a try/fallback node |
-| `WHEN ... DO ...` | Creates a wait-for-event node |
+| `NEW BRANCH <name>` | Creates branch — `git checkout -b <name>` |
+| `PUSH` | Pushes branch with `--set-upstream` |
+| `PR "title"` | Creates or updates open PR for the current branch |
+| `ATTENTION_HERE` | Pauses execution — orange node in canvas, click to approve |
+| `PAUSE_TO_REVIEW` | Same as ATTENTION_HERE |
+| `RUN_TEST` | Gate node — only advances if tests pass |
+| `NOTIFY_ME` | Sends notification and continues |
+| `NOT_TODO` | Logged to `tech_debt.md`, excluded from DAG |
+| `TRY ... OR_ELSE ...` | Try/fallback node |
+| `WHEN ... DO ...` | Wait-for-event node |
 
 ### 4. Run specs from the CLI
 
 ```bash
 golovebox run ./specs/
-# or a single file:
 golovebox run auth-feature.md
 ```
 
-Parses the specs, asks the LLM for an execution plan, and runs the DAG with terminal progress. Checkpoints prompt for `approve` / `reject` on stdin.
+Parses specs, asks the LLM for an execution plan, runs the DAG with terminal progress. Checkpoints prompt for `approve` / `reject` on stdin.
 
 ### 5. Manage skills
 
@@ -136,22 +146,17 @@ golovebox skill list
 golovebox skill generate "review a Go REST API for naming conventions and security"
 ```
 
-The orchestrator automatically includes skill descriptions in its planning context.
-
 **Skill file format** (TOML frontmatter + freeform prompt):
+
 ```markdown
 ---
 name = "go_api_review"
 description = "Reviews a Go REST API for conventions and security"
 tools = ["shell", "read_file", "search_memory"]
-examples = ["Review the endpoints in /internal/api"]
 ---
 
-Analyse each route for:
-- Consistent naming (plural nouns, versioned paths)
-- Correct HTTP status codes per operation
-- Authentication on protected routes
-- Missing input validation
+Analyse each route for consistent naming, correct HTTP status codes,
+authentication on protected routes, and missing input validation.
 ```
 
 ### 6. Resume an interrupted run
@@ -160,26 +165,60 @@ Analyse each route for:
 golovebox resume run-20250601-a3f9c2
 ```
 
-Resets any `running` nodes back to `pending` and re-executes from the current state.
+Resets any `running` nodes back to `pending` and re-executes from current state.
 
 ---
 
-## Web UI walkthrough
+## Web UI
+
+`localhost:8080` via `golovebox web`.
 
 ```
-┌──────────────────────┬──────────────────────────────────────────┐
-│  chat panel          │  DAG canvas                              │
-│                      │                                          │
-│  Upload spec files   │   [parse-specs]──▶[impl-auth]           │
-│  ─────────────────   │        ↓                                 │
-│  [run-20250601-a3f9] │   [ATTENTION_HERE]  ◀── orange, click   │
-│  [run-20250528-c12a] │        ↓                                 │
-│                      │   [run-tests]──▶[open-pr]               │
-│  > run-20250601-a3f9 │                                          │
-│  [impl-auth] running │                                          │
-│  [ATTENTION] waiting │                                          │
-└──────────────────────┴──────────────────────────────────────────┘
+┌─────────────────────────┬────────────────────────────────────────────────┐
+│  left panel             │  DAG canvas (Cytoscape.js)                     │
+│                         │                                                │
+│  ● VM  ● LLM            │   [sync_repo]──▶[impl-auth]──▶[run-tests]     │
+│  ● GitHub  ● Repo       │                      ↓                        │
+│                         │              [ATTENTION_HERE]  ◀── orange     │
+│  Task input:            │                      ↓                        │
+│  ┌───────────────────┐  │              [push]──▶[open-pr]               │
+│  │                   │  │                                                │
+│  └───────────────────┘  │                                                │
+│  [▶ Execute]            ├────────────────────────────────────────────────┤
+│                         │  node: impl-auth              [×]              │
+│  Runs:                  │  ─────────────────────────────────────────────│
+│  run-20250601  running  │  📋 "implement JWT authentication"             │
+│  run-20250528  done     │                                                │
+│                         │  iter 3 — shell                                │
+│                         │  ▶ go test ./internal/auth/...                 │
+│                         │  ◀ PASS coverage: 87.3%                        │
+│                         │                                                │
+├─────────────────────────┴────────────────────────────────────────────────┤
+│  [⌨ Terminal]  [📁 Files]                                                │
+│  root@alpine:~# _                                                        │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Left panel:**
+- Health dashboard — VM, LLM, GitHub, Repo status with parallel checks (5s timeout). Dots pulse while checking.
+- Task input — type a task directly, no `.md` file needed. Sends `POST /api/run` as JSON.
+- Run list — shows task preview and status badge. Persists active run across reloads.
+
+**DAG canvas (Cytoscape.js):**
+- Automatic dagre layout, centered
+- Live node color updates via SSE — **no full re-render**, `cy.getElementById(id).data('color', newColor)`
+- Click any node to open the log panel on the right
+- Hover for full node name and error tooltip
+- Counter `running [7/20]` overlaid on running nodes
+
+**Node panel (right):**
+- Shows the run task and node description at the top
+- Red error box with message when `state === error`
+- ReAct log stream in real time: `iter N — action ▶ params ◀ obs` with syntax highlighting
+
+**Bottom panel (tabs):**
+- **Terminal** — interactive SSH session in the browser via xterm.js + WebSocket. Full PTY: Vim, top, git log work correctly.
+- **Files** — browse VM filesystem via SFTP. Dirs first, click to navigate, click file to open inline.
 
 **Node colours:**
 
@@ -191,17 +230,25 @@ Resets any `running` nodes back to `pending` and re-executes from the current st
 | Red `#f87171` | error |
 | Orange `#fb923c` | waiting_human — click to review |
 
-**SSE real-time updates** — the canvas updates without polling. Each state change is pushed over a Server-Sent Events stream at `/api/runs/{id}/stream`.
+**Session persistence** — `localStorage` saves the active run ID and selected node. Reloading the page reconnects to the SSE stream and restores the panel state.
 
-**REST API** (for scripting or CI integration):
+**Stop button** — visible whenever a run is active. Calls `POST /api/runs/{id}/stop` which cancels the executor's context.
+
+**REST API:**
 
 ```
-POST /api/run                          upload spec files, returns {run_id}
-GET  /api/runs                         list all runs
-GET  /api/runs/{id}                    dag.json + node_states
-GET  /api/runs/{id}/stream             SSE stream of node events
+POST /api/run                          upload spec files or JSON {task}, returns {run_id}
+GET  /api/runs                         list runs (includes task preview)
+GET  /api/runs/{id}                    dag + node_states + task + error_msg
+GET  /api/runs/{id}/stream             SSE stream: state_change + node_log events
+POST /api/runs/{id}/stop               cancel active run
 POST /api/runs/{id}/approve/{nodeID}   approve a checkpoint
-POST /api/runs/{id}/reject/{nodeID}    reject a checkpoint (body: {"reason":"..."})
+POST /api/runs/{id}/reject/{nodeID}    reject a checkpoint
+GET  /api/runs/{id}/nodes/{nodeID}/log ReAct log entries (history + live)
+GET  /api/health                       parallel health checks: VM, LLM, GitHub, Repo
+GET  /api/vm/files?path=               SFTP directory listing (JSON)
+GET  /api/vm/file?path=                SFTP file content (streamed)
+WS   /ws/terminal                      WebSocket SSH PTY bridge
 GET  /api/skills                       list skills
 POST /api/skills/generate              body: {"description":"..."}, returns Skill
 ```
@@ -210,15 +257,15 @@ POST /api/skills/generate              body: {"description":"..."}, returns Skil
 
 ## Building from source
 
-The build pipeline is managed by [Mage](https://magefile.org/). **Do not run `go build` directly** — embedded assets must be populated first.
+Build pipeline managed by [Mage](https://magefile.org/). **Do not run `go build` directly** — embedded assets must be populated first.
 
 ### Prerequisites
 
 - Go 1.22+, no C toolchain, `CGO_ENABLED=0`
 - Mage: `go install github.com/magefile/mage@latest`
-- macOS only: `brew install qemu` (for `mage fetchDarwin`)
-- Linux only: `apt install qemu-system-x86` (for `mage fetchLinux`)
-- Windows only: no extra tools needed — `mage fetchWindows` runs the QEMU installer silently
+- macOS only: `brew install qemu`
+- Linux only: `apt install qemu-system-x86`
+- Windows: no extra tools — `mage fetchWindows` runs the installer silently
 
 ### Build steps
 
@@ -226,125 +273,55 @@ The build pipeline is managed by [Mage](https://magefile.org/). **Do not run `go
 git clone https://github.com/octavioturra/golovebox
 cd golovebox
 
-# 1. Download QEMU + Alpine ISO (all assets go to internal/embed/assets/)
-mage fetch          # fetches for current host OS
+# 1. Download QEMU + Alpine cloud qcow2
+mage fetch          # current host OS
+mage fetchWindows   # cross-compile Windows binary from Linux/macOS
+mage fetchAlpine    # Alpine NoCloud qcow2 only (~164 MB)
 
-# For cross-compiling Windows binary from Linux:
-mage fetchWindows   # downloads weilnetz.de installer, runs it silently, filters files
-mage fetchAlpine    # downloads Alpine NoCloud qcow2 (~164 MB)
-
-# 2. Verify assets
+# 2. Verify
 mage check
-# → checks: qemu-system-x86_64.exe present (>10 MB), DLL count >50,
-#   bios-256k.bin present, Alpine cloud qcow2 present (>40 MB)
 
 # 3. Compile
-mage buildWindows   # CGO_ENABLED=0, GOOS=windows, → build/golovebox.exe (~450 MB)
-mage build          # current OS, → build/golovebox
+mage buildWindows   # → build/golovebox.exe (~450 MB)
+mage build          # current OS
 ```
 
-### Available Mage targets
+### Mage targets
 
 | Target | Description |
 |---|---|
 | `mage fetch` | Download all assets for the current host OS |
-| `mage fetchAlpine` | Download only the Alpine NoCloud cloud qcow2 |
-| `mage fetchWindows` | Download Windows QEMU from qemu.weilnetz.de via silent NSIS install (no UAC) |
-| `mage fetchLinux` | Copy Linux QEMU from system (`apt install qemu-system-x86` first) |
-| `mage fetchDarwin` | Copy macOS QEMU from Homebrew (`brew install qemu` first) |
+| `mage fetchAlpine` | Download Alpine NoCloud cloud qcow2 |
+| `mage fetchWindows` | Download Windows QEMU from qemu.weilnetz.de (silent NSIS install, no UAC) |
+| `mage fetchLinux` | Copy QEMU from system (`apt install qemu-system-x86` first) |
+| `mage fetchDarwin` | Copy QEMU from Homebrew (`brew install qemu` first) |
 | `mage build` | Compile for current OS/arch |
 | `mage buildWindows` | Cross-compile for Windows amd64 |
 | `mage check` | Verify all embedded assets are present and correctly sized |
-| `mage clean` | Remove downloaded assets and scratch dirs (keeps `placeholder.txt`) |
+| `mage clean` | Remove downloaded assets and scratch dirs |
 
-### How the embedded assets work
+### Embedded assets layout
 
 ```
-internal/embed/assets/             ← go:embed source (gitignored except placeholder.txt)
+internal/embed/assets/             ← go:embed source (gitignored except placeholders)
 ├── alpine/
-│   ├── placeholder.txt            ← committed — lets go:embed compile without real image
-│   └── alpine-cloud-x86_64.qcow2  ← populated by mage fetchAlpine (~164 MB, bootable Alpine)
+│   └── alpine-cloud-x86_64.qcow2  ← bootable Alpine 3.21.7 (~164 MB)
 └── qemu/
-    ├── windows-amd64/
-    │   ├── placeholder.txt
-    │   ├── qemu-system-x86_64.exe ← extracted from weilnetz.de NSIS installer
-    │   ├── qemu-img.exe
-    │   ├── *.dll                  ← ~100 DLLs, all needed at runtime
-    │   └── share/qemu/            ← firmware: bios-256k.bin, efi-virtio.rom…
-    ├── linux-amd64/
-    │   ├── placeholder.txt
-    │   └── qemu-system-x86_64     ← copied from system by mage fetchLinux
-    └── darwin-arm64/
-        ├── placeholder.txt
-        └── qemu-system-x86_64     ← copied from Homebrew by mage fetchDarwin
-
-build/tmp/                         ← installer + silent-install scratch (gitignored)
+    └── windows-amd64/
+        ├── qemu-system-x86_64.exe
+        ├── qemu-img.exe
+        ├── *.dll                  ← ~100 DLLs
+        └── share/qemu/            ← BIOS, VirtIO ROMs
 ```
 
 **How `mage fetchWindows` works:**
-1. Scrapes `qemu.weilnetz.de/w64/` to find the latest `qemu-w64-setup-YYYYMMDD.exe`
-2. Downloads the installer and verifies its SHA512
-3. Runs `installer.exe /S /D=<build/tmp/qemu-raw>` with `__COMPAT_LAYER=RunAsInvoker` (no UAC, no admin rights)
+1. Scrapes `qemu.weilnetz.de/w64/` for the latest `qemu-w64-setup-YYYYMMDD.exe`
+2. Downloads and verifies SHA512
+3. Runs installer silently: `installer.exe /S /D=<build/tmp/qemu-raw>` with `__COMPAT_LAYER=RunAsInvoker` (no UAC)
 4. Filters: keeps `qemu-system-x86_64.exe`, `qemu-img.exe`, all `*.dll`, `share/qemu/`
-5. Copies to `internal/embed/assets/qemu/windows-amd64/`
 
-A **placeholder build** (`go build` without assets) compiles cleanly — `golovebox init` will fail with a clear message:
-
-```
-QEMU/Alpine assets not embedded: run 'mage fetch' before 'mage build'
-```
-
-`sandbox.Start()` automatically passes `-L .golovebox/qemu/share/qemu` to QEMU so it finds the embedded firmware (BIOS, VirtIO ROMs) after extraction, and validates the qcow2 magic of `base.img` before booting — so stale/empty disks fail with a clear error instead of SeaBIOS's generic "could not read boot disk".
-
-### Why Alpine NoCloud instead of the Virt ISO
-
-Earlier phases used `alpine-virt-*.iso` (the Alpine live installer) and attempted to drive a first-boot install via cloud-init. That ISO does not ship cloud-init enabled on the boot path — it stops at `localhost login:` waiting for `setup-alpine`. Phase 7 switched to the **Alpine NoCloud cloud image** (`nocloud_alpine-*-x86_64-bios-cloudinit-r0.qcow2`), which is a ready-to-boot Alpine install with cloud-init wired into OpenRC. The CIDATA disk is detected on first boot and applied; no install step is needed.
-
----
-
-## Testing
-
-### Unit / vet
-
-```bash
-mage check        # verify embedded assets (size, DLL count, firmware presence)
-go vet ./...      # static analysis (no VM needed)
-go test ./...     # run tests (no VM needed)
-```
-
-### Smoke test (end-to-end)
-
-The `golovebox init` smoke test (step 9) is the canonical end-to-end test. After a full init:
-
-```
-golovebox status           # shows VM running + SSH connectivity
-golovebox exec "uname -a"  # direct shell command in VM
-```
-
-### Testing the web UI
-
-```bash
-# Start web server in dev mode (system QEMU, no embedded assets needed)
-golovebox web
-
-# Then open http://localhost:8080 and:
-# 1. Upload a .md spec file
-# 2. Watch the DAG canvas populate with pending nodes
-# 3. Observe nodes go yellow (running) → green (done)
-# 4. Click any orange node to approve a checkpoint
-```
-
-### Testing a single DAG run from CLI
-
-```bash
-cat > /tmp/test-spec.md << 'EOF'
-# Test run
-Create a file /tmp/hello.txt with content "golovebox ok".
-RUN_TEST: test -f /tmp/hello.txt
-EOF
-
-golovebox run /tmp/test-spec.md
-```
+**Why Alpine NoCloud instead of Virt ISO:**
+The Virt ISO is an interactive installer that stops at `localhost login:` waiting for `setup-alpine` — cloud-init is not on its boot path. The NoCloud cloud image ships with cloud-init wired into OpenRC. The CIDATA disk is detected on first boot and applied automatically (~1m42s on Windows TCG, ~10s on Linux with KVM). No install step needed.
 
 ---
 
@@ -353,17 +330,24 @@ golovebox run /tmp/test-spec.md
 `.golovebox/config.toml` (created by `golovebox init`):
 
 ```toml
-llm_provider   = "anthropic"           # anthropic | openai | ollama | gemini
+llm_provider   = "anthropic"
 llm_base_url   = "https://api.anthropic.com"
 llm_model      = "claude-opus-4-5"
 api_key        = "sk-ant-..."
 github_token   = "ghp_..."
-telegram_token = "123456:ABC-..."      # optional — enables Telegram daemon
-default_repo   = "owner/repo"          # fallback repo for Telegram commands
-ssh_port       = 2222
-qmp_port       = 4444
-# qemu_path is auto-derived from .golovebox/qemu/; set only to override:
-# qemu_path    = "/custom/path/qemu-system-x86_64"
+telegram_token = "123456:ABC-..."      # optional
+
+[workflow]
+default_repo   = "owner/repo"          # cloned/pulled at the start of every run
+clone_path     = "/root/repo"          # path inside VM
+run_mode       = "build_only"          # no servers, no long-running processes
+default_branch = "main"
+
+[agents]                               # V1 — coding CLI delegation
+default        = "claude-code"
+# claude-code.command = "claude"
+# codex.command       = "codex"
+# gemini.command      = "gemini"
 ```
 
 ### Supported LLM providers
@@ -379,37 +363,35 @@ qmp_port       = 4444
 
 ## Runtime data layout
 
-Everything lives in `.golovebox/` next to the binary — never in system paths:
-
 ```
-.golovebox/
+.golovebox/                             ← everything here, never outside
 ├── config.toml
-├── qemu/                        ← extracted at init (embedded in binary)
-│   ├── qemu-system-x86_64.exe   ← flat layout (Windows: weilnetz.de installer)
-│   ├── qemu-img.exe
-│   ├── *.dll                    ← ~100 DLLs on Windows
-│   └── share/qemu/              ← BIOS firmware, VirtIO ROMs
+├── qemu/                               ← flat: exe + ~100 DLLs + share/qemu/
 ├── vm/
-│   ├── base.img                 ← Alpine cloud qcow2, extracted from embed
-│   ├── .alpine-image-size       ← idempotency marker for base.img
-│   ├── cidata.iso               ← cloud-init NoCloud seed (generated at init)
-│   ├── id_rsa                   ← SSH private key (generated at init)
-│   ├── id_rsa.pub
-│   └── qemu.log                 ← QEMU stdout/stderr (serial console of the VM)
-├── memory/                      ← chromem-go vector embeddings
-├── logs/
-├── skills/                      ← reusable skill .md files
-│   └── go_api_review.md
+│   ├── base.img                        ← Alpine cloud qcow2 (~164 MB)
+│   ├── .alpine-image-size              ← idempotency marker
+│   ├── cidata.iso                      ← cloud-init NoCloud seed
+│   ├── id_rsa, id_rsa.pub              ← RSA 4096 keypair
+│   └── qemu.log                        ← QEMU serial console
+├── memory/                             ← chromem-go vector store
+├── skills/                             ← reusable skill .md files
 └── runs/
     └── run-20250601-a3f9c2/
-        ├── dag.json             ← full DAG plan
-        ├── node_states.json     ← live state snapshot
-        ├── specs/               ← copy of uploaded spec files
+        ├── dag.json
+        ├── node_states.json
+        ├── task.txt                    ← submitted task text
         ├── logs/
-        │   └── node-1.log
-        ├── artifacts/
-        │   └── tech_debt.md     ← NOT_TODO items
-        └── run_summary.md       ← generated on completion
+        │   └── <nodeID>.jsonl          ← ReAct log, append-only
+        └── artifacts/
+            └── tech_debt.md            ← NOT_TODO items
+
+repo/  (user's repository)
+└── .ai/                                ← golovebox's territory in the repo
+    ├── CONTEXT.md                      ← permanent project context
+    ├── DECISIONS.md                    ← architecture decision records
+    ├── specs/<feature>.md              ← golovebox writes before delegating (V1)
+    ├── reports/<feature>.md            ← CLI writes after implementing (V1)
+    └── tasks/<TASK_ID>.md              ← synthesis written after each run
 ```
 
 ---
@@ -417,50 +399,43 @@ Everything lives in `.golovebox/` next to the binary — never in system paths:
 ## CLI reference
 
 ```
-golovebox init [--repair]                  Initialize environment (cloud-init runs ~2 min on first boot)
-golovebox reset [--hard] [-y]              Reset VM (--hard removes everything; -y skips confirmation)
+golovebox init [--repair]                  Initialize environment
+golovebox reset [--hard] [-y]              Reset VM (--hard removes everything)
 golovebox web [--addr :8080] [--timeout]   Start web UI (primary interface)
 
 golovebox run <dir-or-file>                Execute specs through DAG orchestrator
 golovebox resume <run-id>                  Resume an interrupted run
-golovebox status [run-id]                  VM/config status, or details of a run
+golovebox status [run-id]                  VM/config status or run details
+golovebox exec "<cmd>"                     Run a shell command in the VM
 
 golovebox skill list                       List available skills
 golovebox skill generate "<desc>"          Generate a skill via LLM
 
 golovebox github --repo o/r --issue N      Resolve a GitHub issue (one-shot)
-golovebox exec "<cmd>"                     Execute a shell command in the VM
-golovebox daemon                           Telegram bot gateway (secondary interface)
+golovebox daemon                           Telegram bot gateway
 ```
 
 ---
 
-## Telegram (optional, secondary interface)
+## Telegram (optional)
 
-Set `telegram_token` in config and run `golovebox daemon`. The bot responds to:
+Set `telegram_token` in config and run `golovebox daemon`:
 
 | Message | Effect |
 |---|---|
-| `issue #42 repo owner/repo` | Resolve issue #42 in the specified repo |
-| `issue #42` | Resolve issue #42 in `default_repo` |
+| `issue #42 repo owner/repo` | Resolve issue in specified repo |
+| `issue #42` | Resolve in `default_repo` |
 | `status` | VM health check |
-| `help` | List commands |
-
-Progress updates are sent as the agent works:
-```
-⚙️ Processando issue #42 em owner/repo...
-🔄 [3/20] shell: go test ./...
-✅ PR aberta: https://github.com/owner/repo/pull/7
-```
 
 ---
 
 ## Security notes
 
-- **Token isolation**: `CloneRepo` uses `GIT_ASKPASS` with a UUID-named temp script — the token never appears in `git log` or `ps aux`.
-- **VM sandbox**: all code execution is isolated inside the QEMU VM; the host filesystem is not mounted.
-- **SSH pool liveness**: idle connections are validated with a keepalive before reuse — stale connections are discarded automatically.
-- **LLM retry**: transient failures (429, 5xx, network) are retried with exponential backoff (2 s base, 30 s cap, 3 attempts).
+- **Token isolation**: `CloneRepo` uses `GIT_ASKPASS` with a UUID-named temp script — token never appears in `git log` or `ps aux`
+- **VM sandbox**: all code execution isolated inside QEMU VM; host filesystem not mounted
+- **SSH pool liveness**: idle connections validated with keepalive before reuse; stale connections discarded
+- **LLM retry**: transient failures (429, 5xx, network) retried with exponential backoff (2s base, 30s cap, 3 attempts)
+- **WebSocket terminal**: no auth in V0 (localhost-only); token-based auth planned for V1
 
 ---
 
@@ -468,41 +443,73 @@ Progress updates are sent as the agent works:
 
 ```
 golovebox/
-├── cmd/golovebox/main.go       CLI entry point
-├── magefile.go                 Build pipeline (mage targets)
+├── cmd/golovebox/main.go
+├── magefile.go
 └── internal/
-    ├── agent/                  ReAct loop + tool registry + planner
-    ├── config/                 Portable paths (relative to executable)
-    ├── dag/                    DAG, Executor (parallel), CheckpointManager
-    ├── dsl/                    Keyword parser for spec .md files
-    ├── embed/                  Embedded QEMU + Alpine cloud qcow2 assets
-    │   ├── assets/             Populated by "mage fetch" (gitignored)
-    │   ├── extract.go          ExtractQEMU, ExtractAlpineImage (writes base.img)
-    │   ├── keygen.go           RSA 4096 SSH keypair generation
-    │   ├── cloudinit.go        cloud-init NoCloud CIDATA ISO builder (user-data + sshd drop-in)
-    │   └── installboot.go      no-op stubs (cloud image is already installed)
-    ├── gateway/                Handler interface, Gateway, TelegramHandler
-    ├── llm/                    HTTP client (OpenAI-compat + Anthropic, retry)
-    ├── memory/                 chromem-go vector store + embeddings
-    ├── orchestrator/           Specs → DAG via LLM planning
-    ├── sandbox/                QEMU manager, SSH pool, SSH/SFTP helpers
-    ├── setup/                  Init wizard (9 automated steps)
-    ├── skills/                 Skill registry + LLM generator
-    ├── tools/                  Shell, file, GitHub primitives
-    └── web/                    HTTP server, SSE broker, embedded UI
+    ├── agent/          ReAct loop, ProgressFunc(iter, action, params, obs), tool registry
+    ├── config/         Portable paths (relative to executable), WorkflowConfig
+    ├── dag/            DAG types, Executor (parallel), CheckpointManager
+    ├── dsl/            Keyword parser: NEW BRANCH, PUSH, PR, ATTENTION_HERE, RUN_TEST…
+    ├── embed/          go:embed assets, extract.go, keygen.go, cloudinit.go
+    ├── gateway/        Handler interface, Gateway router, TelegramHandler
+    ├── llm/            HTTP client, OpenAI-compat + Anthropic header, retry backoff
+    ├── memory/         chromem-go wrapper, per-agent isolated collections
+    ├── orchestrator/   Specs → DAG via LLM; sync_repo auto-injection; run_mode prompt
+    ├── sandbox/        qemu.go, qmp.go, ssh.go, pool.go
+    ├── setup/          7-step init wizard (idempotent)
+    ├── skills/         Local registry + LLM generator
+    ├── tools/          shell.go (stall detection), files.go, git.go, github.go
+    └── web/
+        ├── server.go   chi router, handlers, SSE broker, WebSocket terminal
+        ├── store.go    RunStore — cancelMap, NodeLogFor, RunMeta
+        ├── nodelog.go  NodeLog — memory buffer + .jsonl append-only
+        ├── terminal.go WebSocket ↔ SSH PTY bridge
+        └── static/
+            └── index.html  Alpine.js components + Cytoscape DAG + xterm.js
 ```
 
 ---
 
 ## Phase roadmap
 
+### V0 — Portable Coding Workflow
+
 | Phase | Status | Summary |
 |---|---|---|
-| 1 | ✅ | Scaffold — CLI, config, QEMU sandbox, SSH/SFTP, init wizard |
+| 1 | ✅ | Foundation — CLI, config, QEMU sandbox, SSH/SFTP, init wizard |
 | 2 | ✅ | Agent — ReAct loop, LLM client, GitHub tools, vector memory |
 | 3 | ✅ | Gateway — Telegram bot, SSH pool, GIT_ASKPASS, LLM retry |
 | 4 | ✅ | Platform — DAG orchestrator, web chat, skills, parallel execution |
-| 5 | ✅ | Self-contained — embedded QEMU + Alpine assets, Mage build pipeline, automated init |
-| 6 | ✅ | QEMU extraction fix — weilnetz.de official installer, silent NSIS install, SHA512 verify, flat layout |
-| 7 | ✅ | Alpine NoCloud cloud image + reset command + config reuse on re-init + silent QEMU boot |
-| 8 | planned | Auth, HTTPS, multi-tenant, skill marketplace, streaming output |
+| 5 | ✅ | Self-contained — embedded QEMU + Alpine, Mage pipeline |
+| 6 | ✅ | QEMU extraction fix — weilnetz.de installer, silent NSIS, SHA512, flat layout |
+| 7 | ✅ | Alpine NoCloud cloud image + silent boot + reset + config reuse + sshd drop-in |
+| 8 | ✅ | Observability — health dashboard, manual task input, session persistence, ReAct stream per node |
+| 9 | ✅ | UX + bugs — task visible in chat/panel, stop button, clear errors, canvas polish, params in log |
+| 10 | 🔜 | UI Refactor — Alpine.js replaces imperative JS; 4 isolated components |
+| 11 | 🔜 | Refactor — Canvas2D→Cytoscape, net/http→chi, fmt→slog, marked.js, highlight.js |
+| 12 | 🔜 | VM in browser — SSH terminal (WebSocket + xterm.js) + SFTP file explorer |
+| 13 | 🔜 | Workflow DSL — NEW BRANCH, PUSH, PR, sync_repo pre-step, stall detection |
+
+### V1 — TechLead
+
+golovebox stops writing code. It specifies, delegates, verifies, communicates, and learns.
+
+| Phase | Name | What it delivers |
+|---|---|---|
+| v1_fase1 | CLI Delegation | `CodingAgent` interface, Claude Code/Codex/Gemini adapters, `delegate_code` + `verify_implementation` tools, `.ai/` convention |
+| v1_fase2 | Project Memory | `.ai/` as living project memory — specs, reports, tasks, decisions. MD-first, portable, vector-indexed |
+| v1_fase3 | Communication Layer | Slack, email, calendar. `notify_slack`, `send_email`, `schedule_meeting` tools |
+| v1_fase4 | PM Integration | GitHub Issues, Jira, Linear — read tickets, update status as DAG progresses, auto-close on merge |
+| v1_fase5 | Learning Loop | Spec quality improves with use; reflection after each task; learns which CLI works best per task type |
+
+**V1 contract:**
+
+```
+golovebox writes:          coding CLI writes:
+.ai/specs/feature.md  →   src/ (implementation)
+.ai/CONTEXT.md        →   tests/ (passing)
+branch, synced repo   →   .ai/reports/feature.md (what it found, decisions made)
+```
+
+**V1 done definition:**
+> Open a Jira issue. golovebox reads it, writes `.ai/specs/`, delegates to Claude Code, Claude Code implements and documents in `.ai/reports/`, golovebox verifies, pushes, opens PR, updates Jira, sends Slack to the team and email to the client — without touching a single line of code.
