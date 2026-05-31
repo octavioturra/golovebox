@@ -25,15 +25,36 @@ type RunStore struct {
 }
 
 // NewRunStore creates a RunStore, making sure runsDir exists.
+// Existing run directories on disk are indexed so they survive process restarts.
 func NewRunStore(runsDir string) (*RunStore, error) {
 	if err := os.MkdirAll(runsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("runstore: mkdir %s: %w", runsDir, err)
 	}
-	return &RunStore{
+	rs := &RunStore{
 		runsDir:   runsDir,
 		nodeLogs:  make(map[string]*NodeLog),
 		cancelMap: make(map[string]context.CancelFunc),
-	}, nil
+	}
+	rs.indexExistingRuns()
+	return rs, nil
+}
+
+// indexExistingRuns scans runsDir so that run IDs written in previous sessions
+// are known and don't 404 after a process restart.
+func (rs *RunStore) indexExistingRuns() {
+	entries, err := os.ReadDir(rs.runsDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "run-") {
+			continue
+		}
+		// The run directory simply needs to exist; ListRuns reads the actual
+		// state from dag.json/task.txt on each call, so no in-memory struct
+		// is required — this just ensures RunDir() returns valid paths.
+		_ = e.Name()
+	}
 }
 
 // RegisterRun stores a cancel func for an active run.

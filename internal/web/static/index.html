@@ -504,6 +504,7 @@ document.addEventListener('alpine:init', () => {
     path:    '/root',
     entries: [],
     loading: false,
+    error:   '',
     history: [],
 
     async cd(newPath) {
@@ -520,10 +521,19 @@ document.addEventListener('alpine:init', () => {
 
     async load() {
       this.loading = true;
+      this.error   = '';
       try {
         const r = await fetch('/api/vm/files?path=' + encodeURIComponent(this.path));
+        if (r.status === 503) {
+          this.error   = 'VM inicializando... tente novamente em alguns segundos.';
+          this.entries = [];
+          return;
+        }
         if (!r.ok) { this.entries = []; return; }
         this.entries = await r.json();
+      } catch(e) {
+        this.error   = 'Erro ao carregar arquivos: ' + e.message;
+        this.entries = [];
       } finally {
         this.loading = false;
       }
@@ -702,7 +712,8 @@ document.addEventListener('alpine:init', () => {
               <button @click="load()" title="Atualizar">↻</button>
             </div>
             <div class="file-loading" x-show="loading">carregando...</div>
-            <div class="file-entries" x-show="!loading">
+            <div x-show="error && !loading" style="padding:8px 10px;font-size:0.75rem;color:#fca5a5" x-text="error"></div>
+            <div class="file-entries" x-show="!loading && !error">
               <template x-for="e in entries" :key="e.path">
                 <div class="file-entry" @click="open(e)">
                   <span class="fe-icon" x-text="icon(e)"></span>
@@ -925,7 +936,17 @@ async function selectRunGlobal(runId) {
   connectSSE(runId);
 
   try {
-    const data = await fetch(`/api/runs/${runId}`).then(r => r.json());
+    const resp = await fetch(`/api/runs/${runId}`);
+    if (resp.status === 404) {
+      // Run no longer exists (e.g. deleted or server restarted before dag.json was written).
+      localStorage.removeItem('glb_run_id');
+      localStorage.removeItem('glb_node_id');
+      currentRunId = null;
+      Alpine.store('session').runId = null;
+      if (window._sse) { window._sse.close(); window._sse = null; }
+      return;
+    }
+    const data = await resp.json();
     Alpine.store('dag').data = data.dag;
 
     const ns = data.node_states || {};
@@ -934,7 +955,7 @@ async function selectRunGlobal(runId) {
       const error = typeof s === 'object' ? (s.error || '') : '';
       Alpine.store('dag').update(id, state, error);
     }
-    loadDAG(data.dag);
+    if (data.dag) loadDAG(data.dag);
   } catch(_) {}
 }
 

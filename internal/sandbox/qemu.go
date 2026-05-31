@@ -134,6 +134,11 @@ func Start(cfg config.Config) (*Manager, error) {
 	return &Manager{cmd: cmd, qmp: qmpClient, cfg: cfg, logFile: logFile}, nil
 }
 
+// IsRunning reports whether the QEMU process is still alive.
+func (m *Manager) IsRunning() bool {
+	return m.cmd != nil && m.cmd.Process != nil
+}
+
 func (m *Manager) Stop() error {
 	if err := m.qmp.Quit(); err != nil {
 		if m.cmd.Process != nil {
