@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/user/golovebox/internal/agent"
 	"github.com/user/golovebox/internal/config"
 	"github.com/user/golovebox/internal/llm"
@@ -129,6 +131,17 @@ func (g *Gateway) RunTask(ctx context.Context, owner, repo string, issueNum int,
 
 	loop := agent.New(g.llm, registry, mem)
 	return loop.Run(ctx, task, progress)
+}
+
+// AcquireSSH acquires an SSH client from the pool for direct use.
+// The caller must call ReleaseSSH when done.
+func (g *Gateway) AcquireSSH(ctx context.Context) (*ssh.Client, error) {
+	return g.pool.Acquire(ctx)
+}
+
+// ReleaseSSH returns an SSH client to the pool.
+func (g *Gateway) ReleaseSSH(c *ssh.Client) {
+	g.pool.Release(c)
 }
 
 // HealthCheckVM acquires a sandbox connection, runs "echo ok", and returns the output.

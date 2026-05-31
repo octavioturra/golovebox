@@ -96,7 +96,12 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 			r.Get("/", s.handleListSkills)
 			r.Post("/generate", s.handleGenerateSkill)
 		})
+
+		r.Get("/vm/files", s.handleVMFiles)
+		r.Get("/vm/file",  s.handleVMFile)
 	})
+
+	r.Get("/ws/terminal", s.handleTerminal)
 
 	srv := &http.Server{Addr: addr, Handler: r}
 
