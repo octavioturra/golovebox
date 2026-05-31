@@ -2,10 +2,15 @@ package dag
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 )
+
+// ErrNeedsHuman signals that a node cannot proceed without human intervention.
+// Wrap with %w in tool/git errors; executor converts to waiting_human state.
+var ErrNeedsHuman = errors.New("needs human review")
 
 // NodeState represents the lifecycle stage of a DAG node.
 type NodeState string
@@ -28,6 +33,12 @@ const (
 	TypeNotify     NodeType = "notify"     // NOTIFY_ME
 	TypeWaitEvent  NodeType = "wait_event" // WHEN/DO
 	TypeTryElse    NodeType = "try_else"   // TRY/OR_ELSE
+
+	// Workflow node types (Fase 13)
+	TypeSyncRepo NodeType = "sync_repo" // auto-injected first node when workflow.default_repo set
+	TypeBranch   NodeType = "branch"    // NEW BRANCH <name>
+	TypePush     NodeType = "push"      // PUSH
+	TypePR       NodeType = "pr"        // PR ["title"]
 )
 
 // Node is a single unit of work in the execution graph.

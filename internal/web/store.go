@@ -148,6 +148,40 @@ type RunMeta struct {
 	Task      string    `json:"task,omitempty"`
 }
 
+// SetRunMeta persists a key-value pair for a run in run_meta.json.
+func (rs *RunStore) SetRunMeta(runID, key, value string) {
+	path := filepath.Join(rs.RunDir(runID), "run_meta.json")
+	meta := rs.readRunMeta(path)
+	meta[key] = value
+	if data, err := json.Marshal(meta); err == nil {
+		_ = atomicWriteStore(path, data)
+	}
+}
+
+// GetRunMeta returns a stored meta value for a run (empty string if absent).
+func (rs *RunStore) GetRunMeta(runID, key string) string {
+	path := filepath.Join(rs.RunDir(runID), "run_meta.json")
+	return rs.readRunMeta(path)[key]
+}
+
+func (rs *RunStore) readRunMeta(path string) map[string]string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return make(map[string]string)
+	}
+	m := make(map[string]string)
+	_ = json.Unmarshal(data, &m)
+	return m
+}
+
+func atomicWriteStore(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 // ReadTask returns the task string stored in task.txt (empty string if absent).
 func (rs *RunStore) ReadTask(runID string) string {
 	data, _ := os.ReadFile(filepath.Join(rs.RunDir(runID), "task.txt"))

@@ -328,7 +328,7 @@ func newRunCmd() *cobra.Command {
 				Model:   cfg.LLMModel,
 			})
 			gw := gateway.New(pool, llmClient, cfg)
-			orch := orchestrator.New(llmClient, nil)
+			orch := orchestrator.New(llmClient, nil, cfg)
 
 			// Parse specs.
 			var specs []*dsl.ParsedSpec
@@ -468,7 +468,7 @@ func newWebCmd() *cobra.Command {
 				Model:   cfg.LLMModel,
 			})
 			gw := gateway.New(pool, llmClient, cfg)
-			orch := orchestrator.New(llmClient, nil)
+			orch := orchestrator.New(llmClient, nil, cfg)
 
 			skillsDir, err := cfg.SkillsDir()
 			if err != nil {

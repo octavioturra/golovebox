@@ -26,6 +26,7 @@ import (
 	"github.com/user/golovebox/internal/llm"
 	"github.com/user/golovebox/internal/orchestrator"
 	"github.com/user/golovebox/internal/skills"
+	"github.com/user/golovebox/internal/tools"
 )
 
 //go:embed static
@@ -258,6 +259,68 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 	}
 
 	dispatch := func(dCtx context.Context, node *dag.Node) (string, error) {
+		// Workflow node types are dispatched directly, not through the agent loop.
+		switch node.Type {
+		case dag.TypeSyncRepo:
+			client, err := s.gw.AcquireSSH(dCtx)
+			if err != nil {
+				return "", err
+			}
+			defer s.gw.ReleaseSSH(client)
+			return tools.SyncRepo(dCtx, client,
+				s.cfg.GitHubToken,
+				s.cfg.Workflow.DefaultRepo,
+				s.cfg.Workflow.ClonePath,
+				s.cfg.Workflow.DefaultBranch,
+			)
+
+		case dag.TypeBranch:
+			client, err := s.gw.AcquireSSH(dCtx)
+			if err != nil {
+				return "", err
+			}
+			defer s.gw.ReleaseSSH(client)
+			branchName := node.Annotation
+			if branchName == "" {
+				branchName = node.Task
+			}
+			out, err := tools.ExecBranch(client, s.cfg.Workflow.ClonePath, branchName)
+			if err == nil {
+				s.store.SetRunMeta(runID, "current_branch", branchName)
+			}
+			return out, err
+
+		case dag.TypePush:
+			client, err := s.gw.AcquireSSH(dCtx)
+			if err != nil {
+				return "", err
+			}
+			defer s.gw.ReleaseSSH(client)
+			branch := s.store.GetRunMeta(runID, "current_branch")
+			return tools.ExecPush(client, s.cfg.GitHubToken, s.cfg.Workflow.ClonePath, branch)
+
+		case dag.TypePR:
+			parts := strings.SplitN(s.cfg.Workflow.DefaultRepo, "/", 2)
+			if len(parts) != 2 {
+				return "", fmt.Errorf("workflow.default_repo not set or invalid")
+			}
+			owner, repo := parts[0], parts[1]
+			branch := s.store.GetRunMeta(runID, "current_branch")
+			titleParam := node.Annotation
+			if titleParam == "" {
+				task := s.store.ReadTask(runID)
+				if len(task) > 60 {
+					task = task[:60] + "..."
+				}
+				titleParam = "feat: " + task
+			}
+			body := fmt.Sprintf("## O que foi feito\n\n%s\n\n---\n*Gerado pelo golovebox run `%s`*",
+				s.store.ReadTask(runID), runID)
+			return tools.ExecPR(dCtx, s.cfg.GitHubToken, owner, repo,
+				branch, s.cfg.Workflow.DefaultBranch, titleParam, body)
+		}
+
+		// Default: run through the agent loop.
 		nodelog := s.store.NodeLogFor(runID, node.ID)
 		logPath := filepath.Join(runDir, "logs", node.ID+".log")
 		return s.gw.RunSpecTask(dCtx, node.Task, func(iter int, action, params, obs string) {
