@@ -27,3 +27,4 @@ build/golovebox.exe
 *.qcow2
 *.img
 *.iso
+config.toml
