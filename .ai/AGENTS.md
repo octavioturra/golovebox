@@ -6,6 +6,16 @@ Você é um engenheiro Go sênior trabalhando no projeto **golovebox**.
 Agente autônomo de código e comunicação. Portable app Windows-first.
 Binário único, zero instalação — `golovebox.exe` em qualquer pasta, sem Python, Node, Docker ou admin.
 
+V0 entrega plataforma de execução completa (DAG + VM + UI + git workflow).
+V1 (em planejamento) promove golovebox a **TechLead** — especifica, delega para CLIs de código (Claude Code, Codex, Gemini), verifica e comunica. Ver `VISION.md` e `hypercontext.json`.
+
+## Onde olhar primeiro
+
+- **`.ai/FASES.json`** — digest único de todas as fases V0. Decisões arquiteturais vivas, libs em uso, padrões enduring, aprendizados. **Substitui a leitura dos `FASE_N.md` individuais.**
+- `.ai/fases/FASE_N.md` — histórico bruto, lê só sob demanda (link de uma decisão específica em `FASES.json`).
+- `.ai/VISION.md` — produto e direção V1.
+- `.ai/hypercontext.json` — metadados estruturados e roadmap V1.
+
 ## Regras de Código — Sem Exceções
 
 - `CGO_ENABLED=0` sempre
@@ -33,6 +43,7 @@ Binário único, zero instalação — `golovebox.exe` em qualquer pasta, sem Py
 | Cloud-init ISO | `github.com/kdomanski/iso9660` |
 | Build | `github.com/magefile/mage` |
 | Telegram | `go-telegram-bot-api/telegram-bot-api/v5` |
+| WebSocket | `github.com/gorilla/websocket` |
 
 ## Stack Frontend (CDN, sem build step)
 
@@ -42,18 +53,19 @@ Binário único, zero instalação — `golovebox.exe` em qualquer pasta, sem Py
 | DAG visual | Cytoscape.js v3 + cytoscape-dagre |
 | Markdown | marked.js |
 | Syntax highlight | highlight.js |
+| Terminal | xterm.js v5 + xterm-addon-fit |
 
 ## Arquitetura
 
 ```
 golovebox.exe
   ├── Gateway        — Telegram, CLI
-  ├── Agent Loop     — ReAct: Thought/Action/Parameters/Observation (texto puro)
-  ├── Tools          — shell, files, github (GIT_ASKPASS), list_dir
-  ├── Orchestrator   — specs DSL → DAG JSON via LLM (IDs snake_case descritivos)
+  ├── Agent Loop     — ReAct: Thought/Action/Parameters/Observation (texto puro, heredoc <<EOF)
+  ├── Tools          — shell, files, github (GIT_ASKPASS + credential.helper), list_dir, git ops
+  ├── Orchestrator   — specs DSL → DAG JSON via LLM (IDs snake_case, task auto-contida)
   ├── Memory         — chromem-go em .golovebox/memory/
-  ├── Web UI         — chi + SSE + embed.FS; Alpine.js + Cytoscape.js
-  └── Sandbox        — QEMU Alpine VM, SSH :2222, QMP :4444
+  ├── Web UI         — chi + SSE + WebSocket + embed.FS; Alpine.js + Cytoscape + xterm.js
+  └── Sandbox        — QEMU Alpine VM, SSH :2222 (pool com retry dial), QMP :4444
 ```
 
 ## Estrutura de Pastas
@@ -63,121 +75,99 @@ golovebox/
 ├── magefile.go
 ├── cmd/golovebox/main.go
 ├── internal/
-│   ├── agent/          # loop.go (ReAct + ProgressFunc), tools.go
-│   ├── config/         # config.go — paths portáveis
-│   ├── dag/            # dag.go, executor.go, checkpoint.go
-│   ├── dsl/            # parser.go — keywords DSL
-│   ├── embed/          # embed_*.go (go:embed), extract.go, cloudinit.go, keygen.go
-│   ├── gateway/        # gateway.go, telegram.go
+│   ├── agent/          # loop.go (ReAct + ProgressFunc 6-arg), tools.go
+│   ├── config/         # config.go — paths portáveis, WorkflowConfig
+│   ├── dag/            # dag.go (TypeSyncRepo/Branch/Push/PR + ErrNeedsHuman), executor.go, checkpoint.go
+│   ├── dsl/            # parser.go — keywords (NEW BRANCH, PUSH, PR, ATTENTION_HERE, RUN_TEST...)
+│   ├── embed/          # embed_*.go (go:embed), extract.go, cloudinit.go (credential.helper), keygen.go
+│   ├── gateway/        # gateway.go (AcquireSSH/IsVMReady), telegram.go
 │   ├── llm/            # client.go — HTTP OpenAI-compat, retry exponential backoff
 │   ├── memory/         # memory.go — chromem-go wrapper
-│   ├── orchestrator/   # orchestrator.go — specs → DAG via LLM
-│   ├── sandbox/        # qemu.go, qmp.go, ssh.go, pool.go
+│   ├── orchestrator/   # orchestrator.go — specs → DAG via LLM, workflowRepo fallback
+│   ├── sandbox/        # qemu.go, qmp.go, ssh.go, pool.go (dial retry 4×)
 │   ├── setup/          # init.go — 7-step wizard
 │   ├── skills/         # registry.go, generator.go
-│   ├── tools/          # shell.go, files.go, github.go
+│   ├── tools/          # shell.go, files.go, git.go (SyncRepo/ExecBranch/ExecPush/ExecPR), github.go
 │   └── web/
-│       ├── server.go   # chi router, handlers, SSE broker
+│       ├── server.go   # chi router, handlers, SSE broker, resolveRepo fallback
 │       ├── store.go    # RunStore — cancelMap, NodeLogFor, RunMeta
-│       ├── nodelog.go  # NodeLog — buffer + .jsonl append-only
+│       ├── nodelog.go  # NodeLog — buffer + .jsonl (com prompt+reply)
+│       ├── terminal.go # WebSocket↔SSH PTY, SFTP file explorer
 │       └── static/
-│           └── index.html  # Alpine components + Cytoscape DAG
+│           └── index.html  # Alpine components + Cytoscape DAG + xterm
 └── go.mod
 ```
 
 ## Runtime — .golovebox/
 
+Detalhes completos em `FASES.json:runtime_layout`. Resumo:
+
 ```
 .golovebox/
-├── config.toml
-├── qemu/              # flat: qemu-system-x86_64.exe + *.dll + share/qemu/
-├── vm/
-│   ├── base.img       # Alpine NoCloud qcow2 (~164MB)
-│   ├── cidata.iso     # cloud-init seed
-│   ├── id_rsa         # keypair SSH
-│   └── qemu.log       # stdout/stderr da VM
-├── memory/            # chromem-go vectors
-├── skills/            # .md com frontmatter TOML
+├── config.toml          # llm/github/telegram + [workflow] + (V1) [agents]
+├── qemu/                # flat: qemu-system-x86_64.exe + DLLs + share/qemu/
+├── vm/                  # base.img, cidata.iso, id_rsa, qemu.log
+├── memory/, skills/
 └── runs/<id>/
-    ├── dag.json
-    ├── node_states.json
-    ├── task.txt
-    ├── logs/<nodeID>.jsonl
+    ├── dag.json, node_states.json, task.txt, run_meta.json
+    ├── logs/<nodeID>.jsonl   # iter/action/params/obs/prompt/reply/ts
     └── artifacts/
 ```
 
 ## Primeiro Boot
 
-`golovebox init`:
-1. Extrai QEMU embutido → `.golovebox/qemu/`
-2. Extrai Alpine cloud qcow2 embutida → `.golovebox/vm/base.img`
-3. Gera keypair RSA 4096
-4. Constrói CIDATA ISO9660 com cloud-init (SSH key + PermitRootLogin)
-5. Config wizard (reutiliza valores existentes se `.golovebox/` já existe)
-6. Boot QEMU silencioso (`stdout→vm/qemu.log`, `stdin→os.DevNull`)
-7. Smoke test: poll SSH até `echo ok`
+`golovebox init` — 7 steps idempotentes. Detalhes em `FASES.json` (FASE 5/7).
+Resumo: extrai QEMU + Alpine qcow2 → gera keypair → CIDATA ISO com SSH key + `.gitconfig` (com `credential.helper=store`) + sshd drop-in → config wizard → boot silencioso → smoke test SSH.
 
-## Web UI — Componentes Alpine
+## Web UI
 
-```
-healthPanel   — /api/health — 4 checks paralelos, timeout 5s, dots coloridos
-chatPanel     — input manual, task.txt no chat, stop button
-runList       — /api/runs — preview da task, badge de status
-nodePanel     — /api/runs/{id}/nodes/{nodeID}/log — log ReAct + error box
-```
+`golovebox web` em `localhost:8080`. Layout em duas colunas + bottom panel:
+- **Esquerda**: chat (status + 4 health dots auto-poll 5s + messages + textarea + runs)
+- **Direita**: DAG canvas (Cytoscape dagre) + node panel deslizável + bottom panel (terminal/files com tabs)
 
-DAG: Cytoscape.js com layout dagre automático. Live update via
-`cy.getElementById(nodeId).data('color', newColor)` — sem re-render do grafo.
-
-SSE: `EventSource` em vanilla JS fora do Alpine. Traduz mensagens em
-`CustomEvent` que os componentes Alpine escutam via `@evento.window`.
+**Node panel** (FASE 16/18):
+- Objetivo do run + descrição do node + branch atual
+- Por iter ReAct: blocos colapsáveis `Prompt enviado` (azul) e `Resposta do LLM` (verde), params, obs
+- Box vermelho com erro; auto-abre quando node falha
+- Persistido — recarregar página mantém histórico
 
 ## Agent Loop
 
 ```go
-type ProgressFunc func(iter int, action, params, obs string)
+type ProgressFunc func(iter int, action, params, obs, prompt, reply string)
 ```
 
 - Texto puro — portável entre todos os LLM providers
+- Heredoc para valores multilinha: `content: <<EOF ... EOF`
 - max 20 iterações por node
 - Output → NodeLog buffer + .jsonl + SSE broadcast
 
-## Decisões de Design
+## Decisões Vivas
 
-- **Cytoscape, não Mermaid**: Mermaid re-renderiza SVG inteiro. Cytoscape atualiza node individual via `.data()` sem re-render — essencial para live updates via SSE
-- **Alpine, não htmx**: backend retorna JSON, não HTML fragments. Alpine é natural para JSON + SSE
-- **chi**: sub-routers por domínio, middleware Recoverer, `chi.URLParam` — pronto para WebSocket + SFTP (Fase 12)
-- **slog**: stdlib Go 1.21+, zero dependência, `--log-format json` no daemon
-- **QEMU via weilnetz.de**: único source com todas as DLLs incluídas para Windows
-- **Alpine NoCloud qcow2**: boot direto, zero install step — elimina 10 min de wait no primeiro uso
-- **Sem LLM SDK**: HTTP client próprio, BaseURL swappável, zero provider lock-in
-- **Sem CGO**: portabilidade total, sem MinGW no host Windows
-- **MD-first memory** (V1): Markdown é fonte de verdade, vetores são derivados — portável entre projetos
+Promovidas pra `FASES.json:enduring_decisions`. Resumo do que é mais usado:
+
+- **Cytoscape, não Mermaid**: updates incrementais via `.data()` sem re-render
+- **Alpine, não htmx**: backend retorna JSON, não HTML fragments
+- **chi**: sub-routers, Recoverer, pronto pra WebSocket/SFTP
+- **slog stdlib**: zero deps, JSON no daemon
+- **QEMU weilnetz.de**: única fonte Windows com todas DLLs
+- **Alpine NoCloud qcow2**: boot direto, sem install (eliminou 10min de wait)
+- **HTTP próprio para LLM**: BaseURL swappável, zero provider lock-in
+- **MD-first memory**: .ai/ é fonte de verdade, vetores derivados
+- **Credential helper persistente**: cloud-init + ~/.git-credentials — `git push` via shell tool funciona sem GIT_ASKPASS
+- **Pool dial retry**: handshake fresco durante `rc-service sshd restart` precisa de retry, não só keepalive idle
 
 ## Status das Fases
 
-| # | Nome | Status |
-|---|---|---|
-| 1 | Portable Foundation | ✅ |
-| 2 | Agent Loop | ✅ |
-| 3 | Gateway | ✅ |
-| 4 | Platform (DAG + Web UI) | ✅ |
-| 5 | Self-contained Binary | ✅ |
-| 6 | QEMU Extraction Fix | ✅ |
-| 7 | Alpine NoCloud + Reset | ✅ |
-| 8 | Observabilidade | ✅ |
-| 9 | UX + Bugs | ✅ |
-| 10 | UI Refactor — Alpine.js | 🔜 |
-| 11 | Refactor — Cytoscape + chi + slog | 🔜 |
+V0 completo (1-18). Detalhes em `FASES.json:phases.v0_done`.
+V1 em planejamento (5 fases). Detalhes em `FASES.json:phases.v1_planned`.
 
-## Roadmap V1
+## Workflow de Documentação
 
-| Fase | Nome | Descrição |
-|---|---|---|
-| v1_fase1 | Workflow Protocol | Branch-per-task, auto-PR, TASK_ID.md, lifecycle hooks (global_prompt, pre/post_step, pre/post_code), hierarquia de contexto |
-| v1_fase2 | Memory Architecture | L1 working → L2 episodic → L3 semantic → L4 hypercontext; MD-first portável |
-| v1_fase3 | Learning Loop | Execute → reflect → abstract → skill → store → retrieve |
-| v1_fase4 | Multi-agent | Orchestrator (principal) + CodeAgent + TestAgent + GitAgent + ReviewAgent |
+1. **Implementando uma fase**: cria `.ai/FASE_N.md` seguindo `FASE_TEMPLATE.md`. Bug fixes pontuais (15/16/17/18) seguem o mesmo formato.
+2. **Ao final da fase**: arquivo permanece em `.ai/` enquanto for "recente".
+3. **A cada 3-5 fases**: digestão — releia os recentes, atualize `FASES.json`, mova os FASE_N.md pra `.ai/fases/`. Mantenha em `FASES.json` apenas o que ainda informa o presente.
+4. **Lendo o projeto pela primeira vez**: leia `FASES.json` + `VISION.md` + `hypercontext.json` + este arquivo. Os `FASE_N.md` históricos só sob demanda.
 
 ## Estilo de Resposta
 

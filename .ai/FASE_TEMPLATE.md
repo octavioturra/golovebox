@@ -1,5 +1,10 @@
 # FASE N — Nome da Fase
 
+> Este arquivo é **histórico**. Vai pra `.ai/fases/FASE_N.md` ao final.
+> A cada 3-5 fases, releia os recentes e **digera em `.ai/FASES.json`**:
+> remova daqui o que se tornou changelog, mantenha lá apenas o que ainda informa o presente
+> (decisões arquiteturais vivas, libs em uso, padrões enduring).
+
 ## Contexto
 
 O que existe hoje e por que não é suficiente.
@@ -83,6 +88,17 @@ Justificativa de design. Se houve alternativa descartada, explicar em uma linha.
 
 Por que foi feito assim. Qual alternativa foi descartada e por quê.
 Uma decisão por subseção. Só as não-óbvias.
+
+> Decisões enduring (que vão informar fases futuras) devem ser **promovidas pra `FASES.json`**
+> em `enduring_decisions` quando a fase for digerida.
+
+---
+
+## Aprendizados
+
+- Bullet curto por aprendizado **não-óbvio** que vale carregar pra próxima fase.
+- Bugs corrigidos viram aprendizado quando revelam padrão (não recipe).
+- Esses aprendizados são promovidos pra `FASES.json:learnings` na digestão.
 
 ---
 

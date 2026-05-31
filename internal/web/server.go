@@ -269,7 +269,7 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 			defer s.gw.ReleaseSSH(client)
 			return tools.SyncRepo(dCtx, client,
 				s.cfg.GitHubToken,
-				s.cfg.Workflow.DefaultRepo,
+				resolveRepo(s.cfg),
 				s.cfg.Workflow.ClonePath,
 				s.cfg.Workflow.DefaultBranch,
 			)
@@ -300,7 +300,7 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 			return tools.ExecPush(client, s.cfg.GitHubToken, s.cfg.Workflow.ClonePath, branch)
 
 		case dag.TypePR:
-			parts := strings.SplitN(s.cfg.Workflow.DefaultRepo, "/", 2)
+			parts := strings.SplitN(resolveRepo(s.cfg), "/", 2)
 			if len(parts) != 2 {
 				return "", fmt.Errorf("workflow.default_repo not set or invalid")
 			}
@@ -640,6 +640,17 @@ func (s *Server) broadcastNodeLog(runID, nodeID string, entry NodeLogEntry) {
 		"ts":      entry.Timestamp,
 	})
 	s.broadcast(runID, string(data))
+}
+
+// resolveRepo returns workflow.default_repo with fallback to top-level default_repo.
+func resolveRepo(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	if cfg.Workflow.DefaultRepo != "" {
+		return cfg.Workflow.DefaultRepo
+	}
+	return cfg.DefaultRepo
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

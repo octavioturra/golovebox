@@ -21,6 +21,16 @@ Action: <tool_name>
 Parameters:
   <key>: <value>
 
+For parameters whose value spans multiple lines (e.g. file contents, HTML, code blocks),
+use a heredoc-style block ending with the same tag on its own line:
+  content: <<EOF
+  <!DOCTYPE html>
+  <html>
+    <body>...</body>
+  </html>
+  EOF
+Everything between <<EOF and EOF is preserved verbatim, including blank lines and indentation.
+
 To finish successfully:
 Action: done
 Parameters:
@@ -141,11 +151,17 @@ func appendObservation(messages []llm.Message, reply, observation string) []llm.
 }
 
 // parseAction extracts thought, action name, and parameters from an LLM reply.
+// Supports two value forms for parameters:
+//   - single-line:  "  key: value"
+//   - heredoc:      "  key: <<EOF" then verbatim lines until a line equal to "EOF"
+//                   (leading whitespace stripped from the terminator line for matching).
 func parseAction(reply string) (thought, action string, params map[string]string) {
 	params = make(map[string]string)
 	inParams := false
 
-	for _, line := range strings.Split(reply, "\n") {
+	lines := strings.Split(reply, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		switch {
 		case strings.HasPrefix(line, "Thought:"):
 			thought = strings.TrimSpace(strings.TrimPrefix(line, "Thought:"))
@@ -157,9 +173,37 @@ func parseAction(reply string) (thought, action string, params map[string]string
 			inParams = true
 		case inParams && strings.HasPrefix(line, "  "):
 			parts := strings.SplitN(strings.TrimPrefix(line, "  "), ":", 2)
-			if len(parts) == 2 {
-				params[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			if len(parts) != 2 {
+				continue
 			}
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+
+			// Heredoc form: collect until the terminator tag.
+			if strings.HasPrefix(val, "<<") {
+				tag := strings.TrimSpace(strings.TrimPrefix(val, "<<"))
+				var buf strings.Builder
+				for j := i + 1; j < len(lines); j++ {
+					if strings.TrimSpace(lines[j]) == tag {
+						i = j
+						break
+					}
+					// Strip the conventional 2-space indent so contents are verbatim
+					// relative to column 0 (LLMs are inconsistent — accept both).
+					content := strings.TrimPrefix(lines[j], "  ")
+					buf.WriteString(content)
+					buf.WriteByte('\n')
+					i = j
+				}
+				v := buf.String()
+				if strings.HasSuffix(v, "\n") {
+					v = v[:len(v)-1]
+				}
+				params[key] = v
+				continue
+			}
+
+			params[key] = val
 		}
 	}
 	return

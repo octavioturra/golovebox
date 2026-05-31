@@ -81,6 +81,8 @@ write_files:
       [user]
       	email = golovebox@localhost
       	name = golovebox
+      [credential]
+      	helper = store
 packages:
   - git
   - curl

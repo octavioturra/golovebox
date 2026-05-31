@@ -1040,6 +1040,14 @@ function connectSSE(runId) {
     updateNodeState(data.id, data.state, data.error || '');
     window.dispatchEvent(new CustomEvent('sse-state-change', { detail: data }));
 
+    // Auto-open the node panel on the first error so the user sees the failure
+    // immediately instead of having to hunt for the failed node in the DAG.
+    if (data.state === 'error') {
+      window.dispatchEvent(new CustomEvent('node-selected', {
+        detail: { runId: currentRunId, nodeId: data.id },
+      }));
+    }
+
     if (data.state === 'waiting_human') {
       window.dispatchEvent(new CustomEvent('sse-checkpoint', {
         detail: { runId: currentRunId, nodeId: data.id, annotation: data.annotation || data.id },

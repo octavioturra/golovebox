@@ -28,11 +28,20 @@ func SyncRepo(ctx context.Context, client *ssh.Client, token, defaultRepo, clone
 	}
 	defer cleanup()
 
+	// Persist credentials so the agent's bare `git push` (issued via the shell
+	// tool, outside ExecPush) authenticates without GIT_ASKPASS.
+	_ = writeGitCredentials(client, token)
+
 	// Check if repo already cloned.
 	checkCmd := fmt.Sprintf("test -d %s/.git && echo exists || echo missing", clonePath)
 	existsOut, _, _ := sandbox.Exec(client, checkCmd)
 
 	if strings.TrimSpace(existsOut) == "missing" {
+		// Ensure parent dir exists so `git clone` doesn't fail with ENOENT
+		// (e.g. clonePath=/root/octavioturra/octavioturra needs /root/octavioturra).
+		mkdirCmd := fmt.Sprintf("mkdir -p $(dirname %s)", clonePath)
+		_, _, _ = sandbox.Exec(client, mkdirCmd)
+
 		cloneCmd := fmt.Sprintf(
 			"GIT_ASKPASS=%s GIT_USERNAME=x-token git clone https://github.com/%s %s 2>&1",
 			askpassPath, defaultRepo, clonePath,
@@ -135,6 +144,24 @@ func isGitConflict(output string) bool {
 		}
 	}
 	return false
+}
+
+// writeGitCredentials persists ~/.git-credentials with the GitHub token so that
+// subsequent `git push/pull/fetch` calls (issued via the agent shell tool, not
+// only via ExecPush/SyncRepo) authenticate via the `credential.helper = store`
+// configured in cloud-init. Idempotent: overwrites on every call.
+func writeGitCredentials(client *ssh.Client, token string) error {
+	if token == "" {
+		return nil
+	}
+	line := fmt.Sprintf("https://x-token:%s@github.com\n", token)
+	if err := sandbox.WriteFile(client, "/root/.git-credentials", []byte(line)); err != nil {
+		return fmt.Errorf("write git-credentials: %w", err)
+	}
+	if _, _, err := sandbox.Exec(client, "chmod 600 /root/.git-credentials"); err != nil {
+		return fmt.Errorf("chmod git-credentials: %w", err)
+	}
+	return nil
 }
 
 // writeAskpass writes a GIT_ASKPASS helper script to the VM and returns its path

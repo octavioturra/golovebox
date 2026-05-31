@@ -45,20 +45,28 @@
     "location": ".ai/ na raiz do repositório",
     "owner": "golovebox",
     "structure": {
-      ".ai/CONTEXT.md": "contexto permanente do projeto — stack, padrões, decisões arquiteturais",
-      ".ai/hypercontext.json": "metadados estruturados do projeto",
-      ".ai/DECISIONS.md": "ADR — architecture decision records",
-      ".ai/specs/<feature>.md": "spec escrita pelo golovebox antes de delegar",
-      ".ai/tasks/<TASK_ID>.md": "síntese do golovebox após conclusão — o que foi feito, o que aprendeu",
-      ".ai/reports/<feature>.md": "report do CLI após implementação — o que encontrou, o que decidiu"
+      ".ai/AGENTS.md": "instruções permanentes para LLM agents trabalhando no projeto",
+      ".ai/VISION.md": "visão de produto narrativa",
+      ".ai/hypercontext.json": "este arquivo — metadados estruturados",
+      ".ai/FASES.json": "digest de todas as fases V0 — substitui leitura dos FASE_N.md",
+      ".ai/FASE_TEMPLATE.md": "template para novas fases",
+      ".ai/FASE_N.md": "fase recente em escrita ou aguardando digestão",
+      ".ai/fases/": "histórico de fases já digeridas (leitura sob demanda)",
+      ".ai/CONTEXT.md": "(V1) contexto permanente do projeto — stack, padrões",
+      ".ai/DECISIONS.md": "(V1) ADR — architecture decision records",
+      ".ai/specs/<feature>.md": "(V1) spec escrita pelo golovebox antes de delegar",
+      ".ai/tasks/<TASK_ID>.md": "(V1) síntese do golovebox após conclusão",
+      ".ai/reports/<feature>.md": "(V1) report do CLI após implementação"
     },
     "portability": "versionar .ai/ junto com src/ — qualquer dev ou agente que clonar o repo tem o contexto completo",
-    "versionability": ".ai/ é Markdown e JSON — diff legível, merge possível, histórico em git"
+    "versionability": ".ai/ é Markdown e JSON — diff legível, merge possível, histórico em git",
+    "digest_workflow": "A cada 3-5 fases, releia os FASE_N.md recentes, atualize FASES.json com decisões enduring + aprendizados, mova os FASE_N.md para .ai/fases/. Evita inchar contexto principal."
   },
 
   "react_loop_evolution": {
-    "v0_mode": "escreve código — write_file, shell pra compilar",
+    "v0_mode": "escreve código — write_file, shell pra compilar (heredoc <<EOF para multilinha)",
     "v1_mode": "coordena — lê, especifica, delega, verifica, comunica",
+    "v0_progress_func": "func(iter, action, params, obs, prompt, reply string) — prompt+reply crus do LLM persistidos por iter em <runDir>/logs/<nodeID>.jsonl",
     "v1_thought_pattern": [
       "lê src/ existente — entende estrutura e padrões",
       "escreve .ai/specs/feature-X.md — especifica com contexto rico",
@@ -91,23 +99,28 @@
     "report_reading": "golovebox lê .ai/reports/feature.md gerado pelo CLI após execução"
   },
 
-  "v0_stays": {
-    "summary": "V0 completo — fases 1-13. Base sólida que o V1 constrói em cima.",
+  "v0_status": {
+    "summary": "V0 completo — 18 fases. Plataforma de execução autônoma entregue.",
+    "phases_done": 18,
     "kept": [
-      "DAG orchestrator — coração do produto",
-      "Web UI (Alpine + Cytoscape)",
-      "DSL (NEW BRANCH, PUSH, PR, ATTENTION_HERE, RUN_TEST)",
-      "VM sandbox — workspace isolado onde os CLIs rodam",
-      "GitHub integration",
+      "DAG orchestrator com task auto-contida — coração do produto",
+      "Web UI (Alpine + Cytoscape + xterm.js + SFTP)",
+      "DSL (NEW BRANCH, PUSH, PR, ATTENTION_HERE, RUN_TEST, TRY/OR_ELSE, NOTIFY_ME, NOT_TODO)",
+      "VM sandbox QEMU Alpine cloud — workspace isolado",
+      "GitHub integration (issues + PRs)",
       "Telegram gateway",
-      "SSH/SFTP para leitura de src/ e escrita de .ai/",
-      "chi + slog + embed.FS"
+      "SSH pool com dial retry e SFTP",
+      "chi + slog + embed.FS",
+      "Credential helper persistente — git push via shell tool funciona sem GIT_ASKPASS",
+      "NodeLog com prompt+reply crus do LLM persistidos",
+      "Health auto-poll, auto-open de node em erro, branch visível no UI"
     ],
-    "repurposed": {
+    "repurposed_for_v1": {
       "shell_tool": "de 'escrever código' para 'git ops + testes'",
       "write_file_tool": "de 'escrever src/' para 'escrever .ai/specs/'",
       "react_loop": "de 'Dev implementando' para 'TechLead coordenando'"
-    }
+    },
+    "see_also": "FASES.json — digest completo das decisões, libs em uso, aprendizados e issues abertos"
   },
 
   "v1_roadmap": {

@@ -68,7 +68,7 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 			o.cfg.GitHubToken != "",
 			repoPathFromRepo(o.cfg.DefaultRepo),
 		)
-	} else if o.cfg != nil && o.cfg.Workflow.DefaultRepo != "" {
+	} else if o.cfg != nil && workflowRepo(o.cfg) != "" {
 		repoCtx = fmt.Sprintf(
 			"- DefaultRepo: %s\n- GitHubToken disponível: %v\n- Repositório pode já estar em %s na VM\n",
 			o.cfg.Workflow.DefaultRepo,
@@ -93,11 +93,11 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 	d := dag.New(runID)
 
 	// Inject sync_repo as the first node when a default repo is configured.
-	if o.cfg != nil && o.cfg.Workflow.DefaultRepo != "" {
+	if o.cfg != nil && workflowRepo(o.cfg) != "" {
 		syncNode := &dag.Node{
 			ID:   "sync_repo",
 			Type: dag.TypeSyncRepo,
-			Task: fmt.Sprintf("Sincronizar %s em %s", o.cfg.Workflow.DefaultRepo, o.cfg.Workflow.ClonePath),
+			Task: fmt.Sprintf("Sincronizar %s em %s", workflowRepo(o.cfg), o.cfg.Workflow.ClonePath),
 		}
 		if err := d.AddNode(syncNode); err != nil {
 			return nil, fmt.Errorf("orchestrator: add sync_repo: %w", err)
@@ -118,7 +118,7 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 			Annotation:   nd.Annotation,
 		}
 		// If sync_repo is injected, all root nodes (no dependencies) must wait for it.
-		if o.cfg != nil && o.cfg.Workflow.DefaultRepo != "" && nd.ID != "sync_repo" {
+		if o.cfg != nil && workflowRepo(o.cfg) != "" && nd.ID != "sync_repo" {
 			if len(nd.Dependencies) == 0 {
 				n.Dependencies = []string{"sync_repo"}
 			}
@@ -129,7 +129,7 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 	}
 	for _, nd := range nodes {
 		// Add sync_repo edge for root nodes.
-		if o.cfg != nil && o.cfg.Workflow.DefaultRepo != "" && nd.ID != "sync_repo" {
+		if o.cfg != nil && workflowRepo(o.cfg) != "" && nd.ID != "sync_repo" {
 			if len(nd.Dependencies) == 0 {
 				if err := d.AddEdge("sync_repo", nd.ID); err != nil {
 					return nil, fmt.Errorf("orchestrator: sync_repo edge to %s: %w", nd.ID, err)
@@ -162,6 +162,17 @@ Rules:
 - NOT_TODO items must NOT appear as nodes
 - Nodes that are independent of each other must NOT have dependencies between them (they run in parallel)
 - Each node needs a clear, actionable "task" string describing exactly what the agent should do
+- The "task" field is the FULL prompt the agent receives — it MUST be self-contained. Restate the user's
+  original objective and any concrete details (file paths, contents, styling, behavior) needed to
+  execute the node correctly. Never assume the agent remembers the broader request from previous nodes.
+  BAD:  "Push the branch to the remote repository"
+  GOOD: "Push the current feature branch to origin. Context: this is part of delivering the user's
+         request 'Crie /root/repo/index.html com uma DIV preta centralizada via CSS flexbox'."
+  BAD:  "Create index.html"
+  GOOD: "Create /root/repo/index.html containing: <!DOCTYPE html>, <html>, <head> with charset utf-8,
+         <body> with a single <div> styled black (background-color:#000), centered horizontally and
+         vertically via CSS flexbox on the body (display:flex; justify-content:center; align-items:center;
+         min-height:100vh; margin:0). The div should be ~200x200px."
 - Each node "id" MUST be snake_case and describe the action performed (e.g. "create_auth_handler", "run_unit_tests", "open_pull_request"). NEVER use generic names like "step-1", "step-2", "task-1", "node-1".
 - Tasks involving git MUST include: clone the repo (if not already present), configure remote with token via GIT_ASKPASS, create branch, commit changes, push and open PR
 - Use DefaultRepo from execution context when available
@@ -222,6 +233,19 @@ func parseNodeDescriptors(reply string) ([]nodeDescriptor, error) {
 		return nil, fmt.Errorf("unmarshal: %w (input: %.200s)", err, s)
 	}
 	return nodes, nil
+}
+
+// workflowRepo returns the repo to clone, falling back to top-level DefaultRepo
+// when workflow.default_repo is not set — so users with only the top-level
+// setting still get sync_repo auto-injection.
+func workflowRepo(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	if cfg.Workflow.DefaultRepo != "" {
+		return cfg.Workflow.DefaultRepo
+	}
+	return cfg.DefaultRepo
 }
 
 func repoPathFromRepo(ownerRepo string) string {
