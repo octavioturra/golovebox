@@ -357,19 +357,27 @@ func (s *Server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "id")
-	d, err := s.store.LoadDAG(runID)
-	if err != nil {
+
+	// If the run directory doesn't exist at all, it's a genuine 404.
+	if _, err := os.Stat(s.store.RunDir(runID)); os.IsNotExist(err) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	dagJSON, _ := d.ToJSON()
+
+	// dag.json may be absent for runs that were aborted during planning.
+	// Return a valid response with a null dag so the frontend degrades gracefully.
+	d, err := s.store.LoadDAG(runID)
+	var dagJSON json.RawMessage
+	if err == nil {
+		dagJSON, _ = d.ToJSON()
+	}
 
 	statesData, _ := os.ReadFile(filepath.Join(s.store.RunDir(runID), "node_states.json"))
 	var nodeStates any
 	_ = json.Unmarshal(statesData, &nodeStates)
 
 	writeJSON(w, map[string]any{
-		"dag":         json.RawMessage(dagJSON),
+		"dag":         dagJSON,
 		"node_states": nodeStates,
 		"task":        s.store.ReadTask(runID),
 	})

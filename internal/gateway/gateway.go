@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -131,6 +132,19 @@ func (g *Gateway) RunTask(ctx context.Context, owner, repo string, issueNum int,
 
 	loop := agent.New(g.llm, registry, mem)
 	return loop.Run(ctx, task, progress)
+}
+
+// IsVMReady reports whether the SSH pool can be reached by attempting a
+// short-timeout dial. Returns false when the VM is still booting.
+func (g *Gateway) IsVMReady() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	c, err := g.pool.Acquire(ctx)
+	if err != nil {
+		return false
+	}
+	g.pool.Release(c)
+	return true
 }
 
 // AcquireSSH acquires an SSH client from the pool for direct use.

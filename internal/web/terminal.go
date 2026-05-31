@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/pkg/sftp"
@@ -38,7 +39,18 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	sshConn, err := s.gw.AcquireSSH(r.Context())
+	// Retry SSH dial up to 3× with 500ms backoff — handles stale pool connections
+	// and race between browser connect and VM finishing boot.
+	var sshConn *ssh.Client
+	for attempt := 1; attempt <= 3; attempt++ {
+		sshConn, err = s.gw.AcquireSSH(r.Context())
+		if err == nil {
+			break
+		}
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		}
+	}
 	if err != nil {
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("erro: VM não disponível\r\n"))
 		return
@@ -147,6 +159,12 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 
 // handleVMFiles lists a directory on the VM via SFTP.
 func (s *Server) handleVMFiles(w http.ResponseWriter, r *http.Request) {
+	if !s.gw.IsVMReady() {
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, `{"error":"vm_not_ready"}`, http.StatusServiceUnavailable)
+		return
+	}
+
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		path = "/root"
