@@ -4,7 +4,7 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"os"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,7 +62,7 @@ func (g *Gateway) Run(ctx context.Context) error {
 		go func(h Handler) {
 			defer wg.Done()
 			if err := h.Start(ctx); err != nil && ctx.Err() == nil {
-				fmt.Fprintf(os.Stderr, "gateway: handler error: %v\n", err)
+				slog.Error("gateway handler error", "error", err)
 			}
 		}(h)
 	}

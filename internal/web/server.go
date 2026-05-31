@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/user/golovebox/internal/config"
 	"github.com/user/golovebox/internal/dag"
 	"github.com/user/golovebox/internal/dsl"
@@ -69,22 +72,33 @@ func New(gw *gateway.Gateway, orch *orchestrator.Orchestrator, cm *dag.Checkpoin
 // Start registers all routes and begins serving on addr.
 // Blocks until ctx is cancelled.
 func (s *Server) Start(ctx context.Context, addr string) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", s.handleIndex)
-	mux.HandleFunc("GET /api/status", s.handleStatus)
-	mux.HandleFunc("POST /api/run", s.handleRun)
-	mux.HandleFunc("GET /api/runs", s.handleListRuns)
-	mux.HandleFunc("GET /api/runs/{id}", s.handleGetRun)
-	mux.HandleFunc("GET /api/runs/{id}/stream", s.handleStream)
-	mux.HandleFunc("POST /api/runs/{id}/approve/{nodeID}", s.handleApprove)
-	mux.HandleFunc("POST /api/runs/{id}/reject/{nodeID}", s.handleReject)
-	mux.HandleFunc("GET /api/skills", s.handleListSkills)
-	mux.HandleFunc("POST /api/skills/generate", s.handleGenerateSkill)
-	mux.HandleFunc("GET /api/health", s.handleHealth)
-	mux.HandleFunc("GET /api/runs/{id}/nodes/{nodeID}/log", s.handleNodeLog)
-	mux.HandleFunc("POST /api/runs/{id}/stop", s.handleStop)
+	r := chi.NewRouter()
+	r.Use(middleware.Recoverer)
 
-	srv := &http.Server{Addr: addr, Handler: mux}
+	r.Get("/", s.handleIndex)
+
+	r.Route("/api", func(r chi.Router) {
+		r.Get("/status", s.handleStatus)
+		r.Get("/health", s.handleHealth)
+		r.Post("/run", s.handleRun)
+		r.Get("/runs", s.handleListRuns)
+
+		r.Route("/runs/{id}", func(r chi.Router) {
+			r.Get("/", s.handleGetRun)
+			r.Get("/stream", s.handleStream)
+			r.Post("/stop", s.handleStop)
+			r.Post("/approve/{nodeID}", s.handleApprove)
+			r.Post("/reject/{nodeID}", s.handleReject)
+			r.Get("/nodes/{nodeID}/log", s.handleNodeLog)
+		})
+
+		r.Route("/skills", func(r chi.Router) {
+			r.Get("/", s.handleListSkills)
+			r.Post("/generate", s.handleGenerateSkill)
+		})
+	})
+
+	srv := &http.Server{Addr: addr, Handler: r}
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -257,7 +271,9 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 			delete(s.activeRuns, runID)
 			s.mu.Unlock()
 		}()
-		_ = exec.Run(runCtx)
+		if err := exec.Run(runCtx); err != nil {
+			slog.Warn("run finished with error", "run_id", runID, "error", err)
+		}
 	}()
 
 	writeJSON(w, map[string]string{"run_id": runID})
@@ -272,7 +288,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
-	runID := r.PathValue("id")
+	runID := chi.URLParam(r, "id")
 	d, err := s.store.LoadDAG(runID)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -292,7 +308,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
-	runID := r.PathValue("id")
+	runID := chi.URLParam(r, "id")
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -333,18 +349,18 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
-	runID := r.PathValue("id")
+	runID := chi.URLParam(r, "id")
 	ok := s.store.CancelRun(runID)
 	writeJSON(w, map[string]bool{"ok": ok})
 }
 
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	s.checkpoint.Approve(r.PathValue("nodeID"))
+	s.checkpoint.Approve(chi.URLParam(r, "nodeID"))
 	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
-	nodeID := r.PathValue("nodeID")
+	nodeID := chi.URLParam(r, "nodeID")
 	var body struct {
 		Reason string `json:"reason"`
 	}
@@ -513,8 +529,8 @@ func (s *Server) healthRepo(ctx context.Context) healthResult {
 }
 
 func (s *Server) handleNodeLog(w http.ResponseWriter, r *http.Request) {
-	runID := r.PathValue("id")
-	nodeID := r.PathValue("nodeID")
+	runID := chi.URLParam(r, "id")
+	nodeID := chi.URLParam(r, "nodeID")
 	entries := s.store.GetNodeLog(runID, nodeID)
 	writeJSON(w, entries)
 }

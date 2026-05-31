@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -32,7 +33,7 @@ func NewTelegramHandler(token string, gw *Gateway) (*TelegramHandler, error) {
 
 // Start begins polling for updates and blocks until ctx is cancelled.
 func (h *TelegramHandler) Start(ctx context.Context) error {
-	fmt.Printf("Telegram bot @%s online\n", h.bot.Self.UserName)
+	slog.Info("telegram bot online", "username", h.bot.Self.UserName)
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
