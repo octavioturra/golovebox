@@ -131,6 +131,21 @@ func (g *Gateway) RunTask(ctx context.Context, owner, repo string, issueNum int,
 	return loop.Run(ctx, task, progress)
 }
 
+// HealthCheckVM acquires a sandbox connection, runs "echo ok", and returns the output.
+// Returns an error if the pool is empty, the connection fails, or the command errors.
+func (g *Gateway) HealthCheckVM(ctx context.Context) (string, error) {
+	sc, err := g.pool.Acquire(ctx)
+	if err != nil {
+		return "", fmt.Errorf("pool: %w", err)
+	}
+	defer g.pool.Release(sc)
+	out := tools.Shell(sc, "echo ok")
+	if !strings.Contains(out, "ok") {
+		return "", fmt.Errorf("unexpected output: %q", out)
+	}
+	return "SSH echo ok", nil
+}
+
 // RunSpecTask runs the agent loop for an arbitrary task string.
 // This is the general-purpose counterpart to RunTask (which is issue-specific).
 // Pass nil for progress to run silently.

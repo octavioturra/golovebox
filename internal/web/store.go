@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/user/golovebox/internal/dag"
@@ -15,7 +16,9 @@ import (
 
 // RunStore manages run directories under .golovebox/runs/.
 type RunStore struct {
-	runsDir string
+	runsDir  string
+	logsMu   sync.Mutex
+	nodeLogs map[string]*NodeLog // key: runID+"/"+nodeID
 }
 
 // NewRunStore creates a RunStore, making sure runsDir exists.
@@ -23,7 +26,20 @@ func NewRunStore(runsDir string) (*RunStore, error) {
 	if err := os.MkdirAll(runsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("runstore: mkdir %s: %w", runsDir, err)
 	}
-	return &RunStore{runsDir: runsDir}, nil
+	return &RunStore{runsDir: runsDir, nodeLogs: make(map[string]*NodeLog)}, nil
+}
+
+// NodeLogFor returns the in-memory NodeLog for the given run+node, creating it on first call.
+func (rs *RunStore) NodeLogFor(runID, nodeID string) *NodeLog {
+	key := runID + "/" + nodeID
+	rs.logsMu.Lock()
+	defer rs.logsMu.Unlock()
+	if nl, ok := rs.nodeLogs[key]; ok {
+		return nl
+	}
+	nl := newNodeLog(nodeID, rs.RunDir(runID))
+	rs.nodeLogs[key] = nl
+	return nl
 }
 
 // NewRun creates the directory tree for a new run and returns the run ID.
