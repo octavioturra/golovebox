@@ -39,16 +39,18 @@ type sseClient struct {
 
 // Server is the embedded HTTP server for web chat and DAG visualisation.
 type Server struct {
-	gw         *gateway.Gateway
-	orch       *orchestrator.Orchestrator
-	checkpoint *dag.CheckpointManager
-	skillsReg  *skills.Registry
-	llmClient  *llm.Client
-	store      *RunStore
-	cfg        *config.Config
-	mu         sync.RWMutex
-	sseClients map[string][]*sseClient
-	activeRuns map[string]*dag.DAG
+	gw              *gateway.Gateway
+	orch            *orchestrator.Orchestrator
+	checkpoint      *dag.CheckpointManager
+	skillsReg       *skills.Registry
+	llmClient       *llm.Client
+	store           *RunStore
+	cfg             *config.Config
+	mu              sync.RWMutex
+	sseClients      map[string][]*sseClient
+	activeRuns      map[string]*dag.DAG
+	vmBootMu        sync.Mutex
+	vmBootStartedAt time.Time // time of first health check that saw vm.ok=false; zeroed when vm.ok=true
 }
 
 // New creates the Server wiring all components together.
@@ -227,9 +229,9 @@ func (s *Server) launchSingleTask(w http.ResponseWriter, ctx context.Context, ru
 			delete(s.activeRuns, runID)
 			s.mu.Unlock()
 		}()
-		_, _ = s.gw.RunSpecTask(runCtx, task, func(iter int, action, params, obs string) {
-			nodelog.Append(iter, action, params, obs)
-			s.broadcastNodeLog(runID, nodeID, NodeLogEntry{iter, action, params, obs, time.Now()})
+		_, _ = s.gw.RunSpecTask(runCtx, task, func(iter int, action, params, obs, prompt, reply string) {
+			nodelog.Append(iter, action, params, obs, prompt, reply)
+			s.broadcastNodeLog(runID, nodeID, NodeLogEntry{iter, action, params, obs, prompt, reply, time.Now()})
 			_ = appendFile(filepath.Join(runDir, "logs", nodeID+".log"),
 				fmt.Sprintf("[%d] %s: %s\n", iter, action, obs))
 		})
@@ -269,7 +271,7 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 			defer s.gw.ReleaseSSH(client)
 			return tools.SyncRepo(dCtx, client,
 				s.cfg.GitHubToken,
-				s.cfg.Workflow.DefaultRepo,
+				resolveRepo(s.cfg),
 				s.cfg.Workflow.ClonePath,
 				s.cfg.Workflow.DefaultBranch,
 			)
@@ -300,7 +302,7 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 			return tools.ExecPush(client, s.cfg.GitHubToken, s.cfg.Workflow.ClonePath, branch)
 
 		case dag.TypePR:
-			parts := strings.SplitN(s.cfg.Workflow.DefaultRepo, "/", 2)
+			parts := strings.SplitN(resolveRepo(s.cfg), "/", 2)
 			if len(parts) != 2 {
 				return "", fmt.Errorf("workflow.default_repo not set or invalid")
 			}
@@ -323,9 +325,9 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 		// Default: run through the agent loop.
 		nodelog := s.store.NodeLogFor(runID, node.ID)
 		logPath := filepath.Join(runDir, "logs", node.ID+".log")
-		return s.gw.RunSpecTask(dCtx, node.Task, func(iter int, action, params, obs string) {
-			nodelog.Append(iter, action, params, obs)
-			s.broadcastNodeLog(runID, node.ID, NodeLogEntry{iter, action, params, obs, time.Now()})
+		return s.gw.RunSpecTask(dCtx, node.Task, func(iter int, action, params, obs, prompt, reply string) {
+			nodelog.Append(iter, action, params, obs, prompt, reply)
+			s.broadcastNodeLog(runID, node.ID, NodeLogEntry{iter, action, params, obs, prompt, reply, time.Now()})
 			_ = appendFile(logPath, fmt.Sprintf("[%d] %s: %s\n", iter, action, obs))
 		})
 	}
@@ -357,21 +359,30 @@ func (s *Server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "id")
-	d, err := s.store.LoadDAG(runID)
-	if err != nil {
+
+	// If the run directory doesn't exist at all, it's a genuine 404.
+	if _, err := os.Stat(s.store.RunDir(runID)); os.IsNotExist(err) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	dagJSON, _ := d.ToJSON()
+
+	// dag.json may be absent for runs that were aborted during planning.
+	// Return a valid response with a null dag so the frontend degrades gracefully.
+	d, err := s.store.LoadDAG(runID)
+	var dagJSON json.RawMessage
+	if err == nil {
+		dagJSON, _ = d.ToJSON()
+	}
 
 	statesData, _ := os.ReadFile(filepath.Join(s.store.RunDir(runID), "node_states.json"))
 	var nodeStates any
 	_ = json.Unmarshal(statesData, &nodeStates)
 
 	writeJSON(w, map[string]any{
-		"dag":         json.RawMessage(dagJSON),
-		"node_states": nodeStates,
-		"task":        s.store.ReadTask(runID),
+		"dag":            dagJSON,
+		"node_states":    nodeStates,
+		"task":           s.store.ReadTask(runID),
+		"current_branch": s.store.GetRunMeta(runID, "current_branch"),
 	})
 }
 
@@ -472,12 +483,13 @@ func (s *Server) handleGenerateSkill(w http.ResponseWriter, r *http.Request) {
 // ── New handlers ──────────────────────────────────────────────────────────────
 
 type healthResult struct {
-	OK  bool   `json:"ok"`
-	Msg string `json:"msg"`
+	OK              bool   `json:"ok"`
+	Msg             string `json:"msg"`
+	BootElapsedSecs int    `json:"boot_elapsed_secs,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
 	type result struct {
@@ -507,6 +519,22 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		r := <-ch
 		out[r.key] = r.res
 	}
+
+	// Track VM boot duration so the UI can show "VM 0:23 ..." while warming up.
+	now := time.Now()
+	vm := out["vm"]
+	s.vmBootMu.Lock()
+	switch {
+	case vm.OK:
+		s.vmBootStartedAt = time.Time{}
+	case s.vmBootStartedAt.IsZero():
+		s.vmBootStartedAt = now
+	default:
+		vm.BootElapsedSecs = int(now.Sub(s.vmBootStartedAt).Seconds())
+		out["vm"] = vm
+	}
+	s.vmBootMu.Unlock()
+
 	writeJSON(w, out)
 }
 
@@ -516,14 +544,14 @@ var healthHTTP = &http.Client{Timeout: 4 * time.Second}
 func (s *Server) healthVM(ctx context.Context) healthResult {
 	out, err := s.gw.HealthCheckVM(ctx)
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
-	return healthResult{true, out}
+	return healthResult{OK: true, Msg:out}
 }
 
 func (s *Server) healthLLM(ctx context.Context) healthResult {
 	if s.cfg.LLMBaseURL == "" {
-		return healthResult{false, "LLMBaseURL não configurado"}
+		return healthResult{OK: false, Msg:"LLMBaseURL não configurado"}
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"model":      s.cfg.LLMModel,
@@ -532,7 +560,7 @@ func (s *Server) healthLLM(ctx context.Context) healthResult {
 	})
 	req, err := http.NewRequestWithContext(ctx, "POST", s.cfg.LLMBaseURL+"/v1/messages", bytes.NewReader(payload))
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", s.cfg.APIKey)
@@ -540,60 +568,60 @@ func (s *Server) healthLLM(ctx context.Context) healthResult {
 	t0 := time.Now()
 	resp, err := healthHTTP.Do(req)
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
 	resp.Body.Close()
 	if resp.StatusCode >= 500 {
-		return healthResult{false, fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		return healthResult{OK: false, Msg:fmt.Sprintf("HTTP %d", resp.StatusCode)}
 	}
-	return healthResult{true, fmt.Sprintf("%s respondeu em %dms", s.cfg.LLMModel, time.Since(t0).Milliseconds())}
+	return healthResult{OK: true, Msg:fmt.Sprintf("%s respondeu em %dms", s.cfg.LLMModel, time.Since(t0).Milliseconds())}
 }
 
 func (s *Server) healthGitHub(ctx context.Context) healthResult {
 	if s.cfg.GitHubToken == "" {
-		return healthResult{false, "GitHubToken não configurado"}
+		return healthResult{OK: false, Msg:"GitHubToken não configurado"}
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/user", nil)
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.GitHubToken)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := healthHTTP.Do(req)
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return healthResult{false, fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		return healthResult{OK: false, Msg:fmt.Sprintf("HTTP %d", resp.StatusCode)}
 	}
 	var u struct {
 		Login string `json:"login"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&u)
-	return healthResult{true, "autenticado como " + u.Login}
+	return healthResult{OK: true, Msg:"autenticado como " + u.Login}
 }
 
 func (s *Server) healthRepo(ctx context.Context) healthResult {
 	if s.cfg.DefaultRepo == "" {
-		return healthResult{true, "DefaultRepo não configurado (ok)"}
+		return healthResult{OK: true, Msg:"DefaultRepo não configurado (ok)"}
 	}
 	url := "https://api.github.com/repos/" + s.cfg.DefaultRepo
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.GitHubToken)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := healthHTTP.Do(req)
 	if err != nil {
-		return healthResult{false, err.Error()}
+		return healthResult{OK: false, Msg:err.Error()}
 	}
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return healthResult{false, fmt.Sprintf("%s: HTTP %d", s.cfg.DefaultRepo, resp.StatusCode)}
+		return healthResult{OK: false, Msg:fmt.Sprintf("%s: HTTP %d", s.cfg.DefaultRepo, resp.StatusCode)}
 	}
-	return healthResult{true, s.cfg.DefaultRepo + ": acessível"}
+	return healthResult{OK: true, Msg:s.cfg.DefaultRepo + ": acessível"}
 }
 
 func (s *Server) handleNodeLog(w http.ResponseWriter, r *http.Request) {
@@ -626,9 +654,22 @@ func (s *Server) broadcastNodeLog(runID, nodeID string, entry NodeLogEntry) {
 		"action":  entry.Action,
 		"params":  entry.Params,
 		"obs":     entry.Observation,
+		"prompt":  entry.Prompt,
+		"reply":   entry.Reply,
 		"ts":      entry.Timestamp,
 	})
 	s.broadcast(runID, string(data))
+}
+
+// resolveRepo returns workflow.default_repo with fallback to top-level default_repo.
+func resolveRepo(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	if cfg.Workflow.DefaultRepo != "" {
+		return cfg.Workflow.DefaultRepo
+	}
+	return cfg.DefaultRepo
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

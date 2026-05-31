@@ -52,6 +52,8 @@ func CloneRepo(sshClient *ssh.Client, token, owner, repo, destPath string) error
 	if err != nil {
 		return fmt.Errorf("git clone: %w: %s", err, stderr)
 	}
+	// Persist credentials so later `git push/pull` from the agent shell works.
+	_ = writeGitCredentials(sshClient, token)
 	return nil
 }
 

@@ -13,7 +13,9 @@ body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:10
 /* Chat */
 #chat{width:380px;min-width:280px;display:flex;flex-direction:column;border-right:1px solid #1e293b;background:#1e293b}
 #chat-header{padding:12px 16px;border-bottom:1px solid #334155;display:flex;align-items:center;gap:8px}
-#chat-header h1{font-size:1rem;font-weight:600;color:#f8fafc}
+#chat-header h1{font-size:1rem;font-weight:600;color:#f8fafc;flex:1}
+.chat-clear{background:none;border:none;color:#64748b;cursor:pointer;font-size:0.85rem;padding:2px 6px;border-radius:4px}
+.chat-clear:hover{color:#e2e8f0;background:#334155}
 .status-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;flex-shrink:0}
 .status-dot.red{background:#ef4444}
 /* Health */
@@ -22,6 +24,7 @@ body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:10
 .h-dot{font-size:1rem;line-height:1;color:#9ca3af;transition:color .2s}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 .h-dot.checking{animation:pulse 1s infinite}
+.vm-timer{font-family:monospace;font-size:0.7rem;color:#fbbf24;margin-left:2px}
 #health-refresh{margin-left:auto;background:none;border:none;color:#64748b;cursor:pointer;font-size:0.8rem;padding:2px 4px;border-radius:4px}
 #health-refresh:hover{color:#e2e8f0;background:#334155}
 /* Messages */
@@ -71,7 +74,9 @@ body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:10
 #dag-panel{flex:1;display:flex;flex-direction:column;overflow:hidden;position:relative}
 #dag-header{padding:10px 16px;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:8px;font-size:0.8rem;color:#94a3b8}
 #run-label{font-weight:600;color:#e2e8f0}
-.stop-btn{margin-left:auto;padding:4px 10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:6px;cursor:pointer;font-size:0.75rem}
+.dag-relayout{margin-left:auto;padding:4px 10px;background:transparent;color:#64748b;border:1px solid #334155;border-radius:6px;cursor:pointer;font-size:0.7rem}
+.dag-relayout:hover{color:#e2e8f0;border-color:#475569;background:#1e293b}
+.stop-btn{margin-left:8px;padding:4px 10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:6px;cursor:pointer;font-size:0.75rem}
 .stop-btn:hover{background:#991b1b}
 #dag-canvas{flex:1;width:100%;min-height:0;background:#0a0f1e}
 #canvas-tooltip{position:fixed;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:0.75rem;color:#e2e8f0;pointer-events:none;display:none;z-index:50;max-width:260px;word-break:break-all;white-space:pre-wrap}
@@ -93,6 +98,12 @@ body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:10
 .log-obs{color:#a3e635;overflow-x:auto}
 /* hljs inside log-obs: override light colors to match dark theme */
 .log-obs .hljs{background:transparent;color:#a3e635;padding:0}
+.log-toggle{cursor:pointer;color:#64748b;font-size:0.7rem;margin:2px 0;user-select:none;display:flex;align-items:center;gap:4px}
+.log-toggle:hover{color:#94a3b8}
+.log-block{background:#020617;border-radius:4px;padding:6px 8px;margin:2px 0 6px;font-family:monospace;font-size:0.7rem;white-space:pre-wrap;word-break:break-word;max-height:240px;overflow-y:auto;color:#cbd5e1;border-left:2px solid #1e293b}
+.log-block.prompt{border-left-color:#3b82f6}
+.log-block.reply{border-left-color:#a3e635}
+.np-branch{color:#fcd34d;font-family:monospace;font-size:0.72rem}
 /* Bottom panel: terminal + file explorer */
 #bottom-panel{border-top:1px solid #1e293b;display:flex;flex-direction:column;height:260px;min-height:0;background:#0d1117}
 .bottom-tabs{display:flex;align-items:center;padding:0 8px;border-bottom:1px solid #1e293b;height:32px;flex-shrink:0}
@@ -162,8 +173,9 @@ document.addEventListener('alpine:init', () => {
   // ── healthPanel ──────────────────────────────────────────
   Alpine.data('healthPanel', () => ({
     loading: false,
+    _vmWasOk: false,
     checks: {
-      vm:     { ok: null, msg: '' },
+      vm:     { ok: null, msg: '', boot_elapsed_secs: 0 },
       llm:    { ok: null, msg: '' },
       github: { ok: null, msg: '' },
       repo:   { ok: null, msg: '' },
@@ -173,10 +185,16 @@ document.addEventListener('alpine:init', () => {
       try {
         const data = await fetch('/api/health').then(r => r.json());
         this.checks = data;
+        const vmOkNow = !!(data.vm && data.vm.ok);
+        if (vmOkNow && !this._vmWasOk) {
+          window.dispatchEvent(new CustomEvent('vm-ready'));
+        }
+        this._vmWasOk = vmOkNow;
       } catch(e) {
         ['vm','llm','github','repo'].forEach(k => {
           this.checks[k] = { ok: false, msg: 'erro: ' + e.message };
         });
+        this._vmWasOk = false;
       } finally {
         this.loading = false;
       }
@@ -185,7 +203,18 @@ document.addEventListener('alpine:init', () => {
       if (this.loading || this.checks[key].ok === null) return '#9ca3af';
       return this.checks[key].ok ? '#34d399' : '#f87171';
     },
-    init() { this.check(); },
+    vmTimer() {
+      const v = this.checks.vm;
+      if (!v || v.ok || !v.boot_elapsed_secs) return '';
+      const s = v.boot_elapsed_secs;
+      const m = Math.floor(s / 60);
+      const r = String(s % 60).padStart(2, '0');
+      return `${m}:${r}`;
+    },
+    init() {
+      this.check();
+      setInterval(() => this.check(), 5000);
+    },
   }));
 
   // ── chatPanel ────────────────────────────────────────────
@@ -204,10 +233,24 @@ document.addEventListener('alpine:init', () => {
       let html = '';
       try { html = marked.parse(String(text || '')); } catch(_) { html = String(text || ''); }
       this.messages.push({ id: Date.now() + Math.random(), html, type, detail });
+      if (this.messages.length > 200) {
+        this.messages = this.messages.slice(-200);
+      }
+      this._persist();
       this.$nextTick(() => {
         const el = this.$refs.log;
         if (el) el.scrollTop = el.scrollHeight;
       });
+    },
+
+    _persist() {
+      try { localStorage.setItem('glb_chat', JSON.stringify(this.messages)); } catch(_) {}
+    },
+
+    clearChat() {
+      this.messages = [];
+      try { localStorage.removeItem('glb_chat'); } catch(_) {}
+      this.addMsg('Chat limpo.');
     },
 
     handleDrop(e) {
@@ -309,7 +352,19 @@ document.addEventListener('alpine:init', () => {
         Alpine.store('session').connOk = r.ok;
       } catch(_) { Alpine.store('session').connOk = false; }
 
-      this.addMsg('Bem-vindo ao golovebox. Faça upload de arquivos .md ou digite uma tarefa para iniciar.');
+      try {
+        const saved = localStorage.getItem('glb_chat');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length) {
+            this.messages = parsed.slice(-200);
+          }
+        }
+      } catch(_) {}
+
+      if (!this.messages.length) {
+        this.addMsg('Bem-vindo ao golovebox. Faça upload de arquivos .md ou digite uma tarefa para iniciar.');
+      }
 
       const savedRunId = localStorage.getItem('glb_run_id');
       if (savedRunId) {
@@ -328,11 +383,28 @@ document.addEventListener('alpine:init', () => {
   // ── runList ──────────────────────────────────────────────
   Alpine.data('runList', () => ({
     runs: [],
+    _reloadTimer: null,
     async load() {
       try {
         const data = await fetch('/api/runs').then(r => r.json());
         this.runs = data || [];
       } catch(_) {}
+    },
+    onStateChange(data) {
+      const state = data && data.state;
+      if (!state) return;
+      const activeId = Alpine.store('session').runId;
+      // Update inline first (cheap)
+      if (activeId) {
+        const run = this.runs.find(r => r.id === activeId);
+        if (run) {
+          if (state === 'error') run.state = 'error';
+          else if ((state === 'running' || state === 'pending') && run.state !== 'error') run.state = 'running';
+        }
+      }
+      // Debounce a refetch so terminal states (done/error) sync with backend infer.
+      if (this._reloadTimer) clearTimeout(this._reloadTimer);
+      this._reloadTimer = setTimeout(() => { this._reloadTimer = null; this.load(); }, 600);
     },
     select(runId) {
       window.dispatchEvent(new CustomEvent('run-selected', { detail: { runId } }));
@@ -355,6 +427,11 @@ document.addEventListener('alpine:init', () => {
     runTask:  '',
     nodeDesc: '',
     nodeError:'',
+    branch:   '',
+    expanded: {},
+
+    toggle(key) { this.expanded = { ...this.expanded, [key]: !this.expanded[key] }; },
+    isOpen(key) { return !!this.expanded[key]; },
 
     obsHtml(e) {
       const text = e.obs || '';
@@ -373,6 +450,8 @@ document.addEventListener('alpine:init', () => {
       this.runTask = '';
       this.nodeDesc= '';
       this.nodeError = '';
+      this.branch    = '';
+      this.expanded  = {};
       localStorage.setItem('glb_node_id', nodeId);
 
       try {
@@ -382,6 +461,7 @@ document.addEventListener('alpine:init', () => {
         ]);
         this.entries  = logData || [];
         this.runTask  = runData.task || '';
+        this.branch   = runData.current_branch || '';
         const dagStore = Alpine.store('dag');
         const node = dagStore.data && dagStore.data.nodes && dagStore.data.nodes[nodeId];
         this.nodeDesc  = (node && (node.annotation || node.task)) || '';
@@ -455,6 +535,7 @@ document.addEventListener('alpine:init', () => {
     ws:         null,
     fitAddon:   null,
     _resizeObs: null,
+    _retried:   false,
 
     mount() {
       this.term = new Terminal({
@@ -468,15 +549,7 @@ document.addEventListener('alpine:init', () => {
       const container = document.getElementById('terminal-container');
       this.term.open(container);
       this.fitAddon.fit();
-
-      this.ws = new WebSocket(`ws://${location.host}/ws/terminal`);
-      this.ws.binaryType = 'arraybuffer';
-
-      this.ws.onopen    = () => this.term.write('\r\n\x1b[32m● conectado à VM\x1b[0m\r\n');
-      this.ws.onmessage = (e) => this.term.write(new Uint8Array(e.data));
-      this.ws.onclose   = () => this.term.write('\r\n\x1b[31m● desconectado\x1b[0m\r\n');
-      this.ws.onerror   = () => this.term.write('\r\n\x1b[31m● erro de conexão\x1b[0m\r\n');
-
+      this._waitForVMAndConnect();
       this.term.onData((data) => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN)
           this.ws.send(data);
@@ -489,6 +562,47 @@ document.addEventListener('alpine:init', () => {
           this.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
       });
       this._resizeObs.observe(container);
+    },
+
+    async _waitForVMAndConnect() {
+      // Avoid the "conectado→desconectado" flicker by waiting for the VM to be
+      // healthy before opening the WebSocket. Healthcheck polling (5s) will
+      // also dispatch a 'vm-ready' event we listen for.
+      this.term.write('\x1b[33m● aguardando VM...\x1b[0m\r\n');
+      const probe = async () => {
+        try {
+          const data = await fetch('/api/health').then(r => r.json());
+          return !!(data && data.vm && data.vm.ok);
+        } catch(_) { return false; }
+      };
+      if (await probe()) { this._connect(); return; }
+      const onReady = () => {
+        window.removeEventListener('vm-ready', onReady);
+        this._connect();
+      };
+      window.addEventListener('vm-ready', onReady);
+    },
+
+    _connect() {
+      const openedAt = Date.now();
+      this.ws = new WebSocket(`ws://${location.host}/ws/terminal`);
+      this.ws.binaryType = 'arraybuffer';
+      this.ws.onopen    = () => {
+        this._retried = false;
+        this.term.write('\r\n\x1b[32m● conectado à VM\x1b[0m\r\n');
+      };
+      this.ws.onmessage = (e) => this.term.write(new Uint8Array(e.data));
+      this.ws.onclose   = () => {
+        const elapsed = Date.now() - openedAt;
+        if (elapsed < 2000 && !this._retried) {
+          this._retried = true;
+          this.term.write('\r\n\x1b[33m● reconectando...\x1b[0m\r\n');
+          setTimeout(() => this._connect(), 500);
+          return;
+        }
+        this.term.write('\r\n\x1b[31m● desconectado\x1b[0m\r\n');
+      };
+      this.ws.onerror = () => this.term.write('\r\n\x1b[31m● erro de conexão\x1b[0m\r\n');
     },
 
     destroy() {
@@ -504,6 +618,7 @@ document.addEventListener('alpine:init', () => {
     path:    '/root',
     entries: [],
     loading: false,
+    error:   '',
     history: [],
 
     async cd(newPath) {
@@ -520,10 +635,19 @@ document.addEventListener('alpine:init', () => {
 
     async load() {
       this.loading = true;
+      this.error   = '';
       try {
         const r = await fetch('/api/vm/files?path=' + encodeURIComponent(this.path));
+        if (r.status === 503) {
+          this.error   = 'VM inicializando... tente novamente em alguns segundos.';
+          this.entries = [];
+          return;
+        }
         if (!r.ok) { this.entries = []; return; }
         this.entries = await r.json();
+      } catch(e) {
+        this.error   = 'Erro ao carregar arquivos: ' + e.message;
+        this.entries = [];
       } finally {
         this.loading = false;
       }
@@ -576,6 +700,7 @@ document.addEventListener('alpine:init', () => {
     <div id="chat-header">
       <div class="status-dot" :class="{red: !$store.session.connOk}"></div>
       <h1>golovebox</h1>
+      <button class="chat-clear" @click="clearChat()" title="Limpar histórico do chat">✕</button>
     </div>
 
     <!-- Health -->
@@ -588,6 +713,7 @@ document.addEventListener('alpine:init', () => {
                 :title="checks[key] ? checks[key].msg : ''"
                 >●</span>
           <span x-text="key.toUpperCase()"></span>
+          <span x-show="key === 'vm' && vmTimer()" class="vm-timer" x-text="vmTimer()"></span>
         </div>
       </template>
       <button id="health-refresh" @click="check()" title="Verificar health">↻</button>
@@ -637,7 +763,8 @@ document.addEventListener('alpine:init', () => {
     <div id="runs-panel"
          x-data="runList"
          @run-started.window="load()"
-         @run-selected.window="load()">
+         @run-selected.window="load()"
+         @sse-state-change.window="onStateChange($event.detail)">
       <h2>Runs anteriores</h2>
       <div id="runs-list">
         <template x-for="r in runs" :key="r.id">
@@ -661,6 +788,10 @@ document.addEventListener('alpine:init', () => {
     <div id="dag-header">
       <span>DAG</span>
       <span id="run-label" x-text="$store.session.runId || ''" x-data></span>
+      <button class="dag-relayout"
+              x-data
+              @click="window.relayoutDAG && window.relayoutDAG()"
+              title="Reorganizar (limpa posições salvas deste run)">↻ reorganizar</button>
       <button class="stop-btn"
               x-show="$store.session.running"
               x-cloak
@@ -702,7 +833,8 @@ document.addEventListener('alpine:init', () => {
               <button @click="load()" title="Atualizar">↻</button>
             </div>
             <div class="file-loading" x-show="loading">carregando...</div>
-            <div class="file-entries" x-show="!loading">
+            <div x-show="error && !loading" style="padding:8px 10px;font-size:0.75rem;color:#fca5a5" x-text="error"></div>
+            <div class="file-entries" x-show="!loading && !error">
               <template x-for="e in entries" :key="e.path">
                 <div class="file-entry" @click="open(e)">
                   <span class="fe-icon" x-text="icon(e)"></span>
@@ -740,6 +872,10 @@ document.addEventListener('alpine:init', () => {
           <strong>Descrição do node:</strong>
           <span class="np-meta-val" x-text="nodeDesc"></span>
         </div>
+        <div x-show="branch" style="margin-top:6px">
+          <strong>Branch:</strong>
+          <span class="np-branch" x-text="branch"></span>
+        </div>
       </div>
 
       <div class="np-error" x-show="nodeError" x-text="'✗ Erro:\n' + nodeError"></div>
@@ -751,6 +887,24 @@ document.addEventListener('alpine:init', () => {
               <span x-text="'iter ' + e.iter + ' — ' + e.action"></span>
               <span x-text="fmtTime(e.ts)"></span>
             </div>
+            <template x-if="e.prompt">
+              <div>
+                <div class="log-toggle" @click="toggle('p'+i)">
+                  <span x-text="isOpen('p'+i) ? '▼' : '▸'"></span>
+                  <span>Prompt enviado</span>
+                </div>
+                <div class="log-block prompt" x-show="isOpen('p'+i)" x-text="e.prompt"></div>
+              </div>
+            </template>
+            <template x-if="e.reply">
+              <div>
+                <div class="log-toggle" @click="toggle('r'+i)">
+                  <span x-text="isOpen('r'+i) ? '▼' : '▸'"></span>
+                  <span>Resposta do LLM</span>
+                </div>
+                <div class="log-block reply" x-show="isOpen('r'+i)" x-text="e.reply"></div>
+              </div>
+            </template>
             <div class="log-param" x-show="e.params" x-text="'▶ ' + (e.params || e.action)"></div>
             <div class="log-obs"><pre x-html="obsHtml(e)"></pre></div>
           </div>
@@ -838,15 +992,47 @@ const cy = cytoscape({
   boxSelectionEnabled: false,
 });
 
+function positionsKey(runId) { return 'glb_positions_' + (runId || 'unknown'); }
+
+function loadSavedPositions(runId) {
+  try {
+    const raw = localStorage.getItem(positionsKey(runId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object') ? parsed : null;
+  } catch(_) { return null; }
+}
+
+function savePositions() {
+  if (!currentRunId) return;
+  const map = {};
+  cy.nodes().forEach(n => {
+    const p = n.position();
+    map[n.id()] = { x: p.x, y: p.y };
+  });
+  try { localStorage.setItem(positionsKey(currentRunId), JSON.stringify(map)); } catch(_) {}
+}
+
+function clearSavedPositions(runId) {
+  try { localStorage.removeItem(positionsKey(runId)); } catch(_) {}
+}
+
+function relayoutDAG() {
+  clearSavedPositions(currentRunId);
+  cy.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 80, rankSep: 120 }).run();
+  cy.fit(cy.elements(), 40);
+}
+
 function loadDAG(dagData) {
   cy.elements().remove();
   if (!dagData || !dagData.nodes) return;
   const dagStore = Alpine.store('dag');
+  const saved = loadSavedPositions(currentRunId);
 
   Object.entries(dagData.nodes || {}).forEach(([id, n]) => {
     const ns    = dagStore.nodes[id] || {};
     const state = ns.state || n.state || 'pending';
-    cy.add({
+    const addOpts = {
       group: 'nodes',
       data: {
         id,
@@ -858,7 +1044,11 @@ function loadDAG(dagData) {
         task:       n.task || '',
         error:      ns.error || '',
       },
-    });
+    };
+    if (saved && saved[id] && typeof saved[id].x === 'number' && typeof saved[id].y === 'number') {
+      addOpts.position = { x: saved[id].x, y: saved[id].y };
+    }
+    cy.add(addOpts);
     if (state === 'waiting_human') cy.getElementById(id).addClass('waiting_human');
   });
 
@@ -866,8 +1056,26 @@ function loadDAG(dagData) {
     cy.add({ group: 'edges', data: { id: `e${i}`, source: from, target: to } });
   });
 
-  cy.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 40, rankSep: 60 }).run();
-  cy.fit(cy.elements(), 30);
+  // Identify nodes whose position was not restored from localStorage.
+  const missing = cy.nodes().filter(n => {
+    const p = n.position();
+    return !p || (p.x === 0 && p.y === 0);
+  });
+
+  if (missing.length === cy.nodes().length) {
+    // No saved positions at all → full dagre layout, then center.
+    cy.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 80, rankSep: 120 }).run();
+    cy.fit(cy.elements(), 40);
+    cy.center();
+  } else if (missing.length > 0) {
+    // Partial: lay out just the missing ones with dagre on the whole graph for
+    // consistency, but keep saved positions as anchors via 'preset' fallback.
+    cy.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 80, rankSep: 120 }).run();
+    cy.fit(cy.elements(), 40);
+  } else {
+    // Everything restored — just fit the camera.
+    cy.fit(cy.elements(), 40);
+  }
 }
 
 function updateNodeState(id, state, error) {
@@ -918,6 +1126,8 @@ cy.on('mouseover', 'node', e => {
 
 cy.on('mouseout', 'node', () => { tooltip.style.display = 'none'; });
 
+cy.on('dragfree', 'node', () => savePositions());
+
 // ── selectRunGlobal ────────────────────────────────────────
 async function selectRunGlobal(runId) {
   currentRunId = runId;
@@ -925,7 +1135,17 @@ async function selectRunGlobal(runId) {
   connectSSE(runId);
 
   try {
-    const data = await fetch(`/api/runs/${runId}`).then(r => r.json());
+    const resp = await fetch(`/api/runs/${runId}`);
+    if (resp.status === 404) {
+      // Run no longer exists (e.g. deleted or server restarted before dag.json was written).
+      localStorage.removeItem('glb_run_id');
+      localStorage.removeItem('glb_node_id');
+      currentRunId = null;
+      Alpine.store('session').runId = null;
+      if (window._sse) { window._sse.close(); window._sse = null; }
+      return;
+    }
+    const data = await resp.json();
     Alpine.store('dag').data = data.dag;
 
     const ns = data.node_states || {};
@@ -934,7 +1154,7 @@ async function selectRunGlobal(runId) {
       const error = typeof s === 'object' ? (s.error || '') : '';
       Alpine.store('dag').update(id, state, error);
     }
-    loadDAG(data.dag);
+    if (data.dag) loadDAG(data.dag);
   } catch(_) {}
 }
 
@@ -964,6 +1184,14 @@ function connectSSE(runId) {
     Alpine.store('dag').update(data.id, data.state, data.error || '');
     updateNodeState(data.id, data.state, data.error || '');
     window.dispatchEvent(new CustomEvent('sse-state-change', { detail: data }));
+
+    // Auto-open the node panel on the first error so the user sees the failure
+    // immediately instead of having to hunt for the failed node in the DAG.
+    if (data.state === 'error') {
+      window.dispatchEvent(new CustomEvent('node-selected', {
+        detail: { runId: currentRunId, nodeId: data.id },
+      }));
+    }
 
     if (data.state === 'waiting_human') {
       window.dispatchEvent(new CustomEvent('sse-checkpoint', {

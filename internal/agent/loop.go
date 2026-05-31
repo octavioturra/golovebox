@@ -21,6 +21,16 @@ Action: <tool_name>
 Parameters:
   <key>: <value>
 
+For parameters whose value spans multiple lines (e.g. file contents, HTML, code blocks),
+use a heredoc-style block ending with the same tag on its own line:
+  content: <<EOF
+  <!DOCTYPE html>
+  <html>
+    <body>...</body>
+  </html>
+  EOF
+Everything between <<EOF and EOF is preserved verbatim, including blank lines and indentation.
+
 To finish successfully:
 Action: done
 Parameters:
@@ -33,7 +43,10 @@ Parameters:
 
 // ProgressFunc is called after each tool execution to report loop progress.
 // Nil is accepted — callers that don't need progress updates pass nil.
-type ProgressFunc func(iteration int, action, params, observation string)
+// `prompt` is the user-role message sent to the LLM at this iteration (full
+// systemPrompt+task on the first iter, observation-only on subsequent iters).
+// `reply` is the raw LLM response before parseAction extracts action/params.
+type ProgressFunc func(iteration int, action, params, observation, prompt, reply string)
 
 type Loop struct {
 	llm      *llm.Client
@@ -59,6 +72,11 @@ func (l *Loop) Run(ctx context.Context, task string, progress ProgressFunc) (str
 	}
 
 	for i := range MaxIterations {
+		lastPrompt := ""
+		if n := len(messages); n > 0 {
+			lastPrompt = messages[n-1].Content
+		}
+
 		reply, err := l.llm.Complete(ctx, messages)
 		if err != nil {
 			return "", fmt.Errorf("llm complete (iter %d): %w", i, err)
@@ -96,7 +114,7 @@ func (l *Loop) Run(ctx context.Context, task string, progress ProgressFunc) (str
 			if len(obs) > 120 {
 				obs = obs[:120] + "..."
 			}
-			progress(i+1, action, formatParams(params), obs)
+			progress(i+1, action, formatParams(params), obs, lastPrompt, reply)
 		}
 
 		messages = appendObservation(messages, reply, observation)
@@ -133,11 +151,17 @@ func appendObservation(messages []llm.Message, reply, observation string) []llm.
 }
 
 // parseAction extracts thought, action name, and parameters from an LLM reply.
+// Supports two value forms for parameters:
+//   - single-line:  "  key: value"
+//   - heredoc:      "  key: <<EOF" then verbatim lines until a line equal to "EOF"
+//                   (leading whitespace stripped from the terminator line for matching).
 func parseAction(reply string) (thought, action string, params map[string]string) {
 	params = make(map[string]string)
 	inParams := false
 
-	for _, line := range strings.Split(reply, "\n") {
+	lines := strings.Split(reply, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		switch {
 		case strings.HasPrefix(line, "Thought:"):
 			thought = strings.TrimSpace(strings.TrimPrefix(line, "Thought:"))
@@ -149,9 +173,37 @@ func parseAction(reply string) (thought, action string, params map[string]string
 			inParams = true
 		case inParams && strings.HasPrefix(line, "  "):
 			parts := strings.SplitN(strings.TrimPrefix(line, "  "), ":", 2)
-			if len(parts) == 2 {
-				params[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			if len(parts) != 2 {
+				continue
 			}
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+
+			// Heredoc form: collect until the terminator tag.
+			if strings.HasPrefix(val, "<<") {
+				tag := strings.TrimSpace(strings.TrimPrefix(val, "<<"))
+				var buf strings.Builder
+				for j := i + 1; j < len(lines); j++ {
+					if strings.TrimSpace(lines[j]) == tag {
+						i = j
+						break
+					}
+					// Strip the conventional 2-space indent so contents are verbatim
+					// relative to column 0 (LLMs are inconsistent — accept both).
+					content := strings.TrimPrefix(lines[j], "  ")
+					buf.WriteString(content)
+					buf.WriteByte('\n')
+					i = j
+				}
+				v := buf.String()
+				if strings.HasSuffix(v, "\n") {
+					v = v[:len(v)-1]
+				}
+				params[key] = v
+				continue
+			}
+
+			params[key] = val
 		}
 	}
 	return

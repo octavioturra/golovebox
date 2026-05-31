@@ -1,0 +1,1 @@
+Use o arquivo .ai/AGENTS.md como referência. Ele é seu AGENTS.md

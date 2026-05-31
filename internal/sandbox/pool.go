@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -53,13 +54,27 @@ func (p *Pool) Acquire(ctx context.Context) (*ssh.Client, error) {
 		// stale connection discarded — try next idle or dial fresh
 	}
 
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
+	// Dial fresh with retry — first connect right after VM boot frequently
+	// fails with "handshake failed: connection forcibly closed" while sshd
+	// finishes restarting (cloud-init reapplies the drop-in then `rc-service
+	// sshd restart`). Up to 4 attempts with linear backoff (~3.7s total).
+	var lastErr error
+	for attempt := 1; attempt <= 4; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		c, err := Dial(p.cfg.Host, strconv.Itoa(p.cfg.Port), p.cfg.User, p.cfg.KeyPath)
+		if err == nil {
+			return c, nil
+		}
+		lastErr = err
+		if attempt < 4 {
+			time.Sleep(time.Duration(attempt) * 400 * time.Millisecond)
+		}
 	}
-
-	return Dial(p.cfg.Host, strconv.Itoa(p.cfg.Port), p.cfg.User, p.cfg.KeyPath)
+	return nil, lastErr
 }
 
 // Release returns a connection to the pool for reuse.

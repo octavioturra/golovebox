@@ -74,6 +74,15 @@ write_files:
       PubkeyAuthentication yes
       PasswordAuthentication no
       ChallengeResponseAuthentication no
+  - path: /root/.gitconfig
+    permissions: '0644'
+    owner: root:root
+    content: |
+      [user]
+      	email = golovebox@localhost
+      	name = golovebox
+      [credential]
+      	helper = store
 packages:
   - git
   - curl
@@ -84,8 +93,6 @@ packages:
 runcmd:
   - rc-update add sshd default
   - rc-service sshd restart
-  - git config --global user.email "agent@golovebox.local"
-  - git config --global user.name "golovebox-agent"
 `, key, key)
 }
 

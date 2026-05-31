@@ -11,6 +11,8 @@ golovebox web    →   opens localhost:8080
 
 > **V1 direction**: golovebox is being promoted from Dev to TechLead. Instead of writing code itself, it will specify, delegate to coding CLIs (Claude Code, Codex, Gemini CLI), verify the result, and keep everyone informed. See [V1 Roadmap](#v1-roadmap--techlead).
 
+> **For contributors and agents**: project context lives under [`.ai/`](.ai/) — `AGENTS.md` (instructions), `VISION.md` (product narrative), `hypercontext.json` (structured metadata), and **`FASES.json`** (digest of all V0 phases — read this instead of the individual `FASE_N.md` files in `.ai/fases/`).
+
 ---
 
 ## How it works
@@ -117,8 +119,8 @@ NOT_TODO: OAuth2 social login (out of scope for this sprint)
 
 | Keyword | Effect |
 |---|---|
-| `NEW BRANCH <name>` | Creates branch — `git checkout -b <name>` |
-| `PUSH` | Pushes branch with `--set-upstream` |
+| `NEW BRANCH <name>` | Creates branch — `git checkout -b <name>`, persisted in `run_meta.json` |
+| `PUSH` | Pushes branch with `--set-upstream` (auth via persistent `credential.helper=store`) |
 | `PR "title"` | Creates or updates open PR for the current branch |
 | `ATTENTION_HERE` | Pauses execution — orange node in canvas, click to approve |
 | `PAUSE_TO_REVIEW` | Same as ATTENTION_HERE |
@@ -127,6 +129,8 @@ NOT_TODO: OAuth2 social login (out of scope for this sprint)
 | `NOT_TODO` | Logged to `tech_debt.md`, excluded from DAG |
 | `TRY ... OR_ELSE ...` | Try/fallback node |
 | `WHEN ... DO ...` | Wait-for-event node |
+
+The orchestrator generates each node's `task` as a **self-contained prompt** — restating the user's original objective plus concrete details (file paths, content, behavior) — so the ReAct loop has the context it needs to produce real output instead of stubs.
 
 ### 4. Run specs from the CLI
 
@@ -200,7 +204,7 @@ Resets any `running` nodes back to `pending` and re-executes from current state.
 ```
 
 **Left panel:**
-- Health dashboard — VM, LLM, GitHub, Repo status with parallel checks (5s timeout). Dots pulse while checking.
+- Health dashboard — VM, LLM, GitHub, Repo status with parallel checks (3s timeout, **auto-polled every 5s**). Dots pulse while checking.
 - Task input — type a task directly, no `.md` file needed. Sends `POST /api/run` as JSON.
 - Run list — shows task preview and status badge. Persists active run across reloads.
 
@@ -212,9 +216,13 @@ Resets any `running` nodes back to `pending` and re-executes from current state.
 - Counter `running [7/20]` overlaid on running nodes
 
 **Node panel (right):**
-- Shows the run task and node description at the top
-- Red error box with message when `state === error`
-- ReAct log stream in real time: `iter N — action ▶ params ◀ obs` with syntax highlighting
+- Shows the run task, node description, and **current branch** at the top
+- Red error box with message when `state === error` — panel **auto-opens** on the failed node
+- ReAct log stream in real time, with collapsible blocks per iteration:
+  - **Prompt sent** to the LLM (blue border)
+  - **Raw LLM reply** before action parsing (green border)
+  - Action name, parameters, observation with syntax highlighting
+- Everything persisted in `<runDir>/logs/<nodeID>.jsonl` — reloading the page restores the full history
 
 **Bottom panel (tabs):**
 - **Terminal** — interactive SSH session in the browser via xterm.js + WebSocket. Full PTY: Vim, top, git log work correctly.
@@ -432,8 +440,9 @@ Set `telegram_token` in config and run `golovebox daemon`:
 ## Security notes
 
 - **Token isolation**: `CloneRepo` uses `GIT_ASKPASS` with a UUID-named temp script — token never appears in `git log` or `ps aux`
+- **Persistent git credentials**: cloud-init enables `credential.helper=store` in the VM's `.gitconfig`. After clone, `~/.git-credentials` is written via SFTP (perms `0600`) — subsequent `git push/pull` issued from the agent's shell tool authenticate transparently without exposing the token in process listings
 - **VM sandbox**: all code execution isolated inside QEMU VM; host filesystem not mounted
-- **SSH pool liveness**: idle connections validated with keepalive before reuse; stale connections discarded
+- **SSH pool**: idle connections validated with keepalive before reuse; stale connections discarded. **Fresh dials retry 4× with linear backoff** (~3.7s total) to survive the cloud-init `sshd restart` window
 - **LLM retry**: transient failures (429, 5xx, network) retried with exponential backoff (2s base, 30s cap, 3 attempts)
 - **WebSocket terminal**: no auth in V0 (localhost-only); token-based auth planned for V1
 
@@ -446,7 +455,7 @@ golovebox/
 ├── cmd/golovebox/main.go
 ├── magefile.go
 └── internal/
-    ├── agent/          ReAct loop, ProgressFunc(iter, action, params, obs), tool registry
+    ├── agent/          ReAct loop, ProgressFunc(iter, action, params, obs, prompt, reply), heredoc parser, tool registry
     ├── config/         Portable paths (relative to executable), WorkflowConfig
     ├── dag/            DAG types, Executor (parallel), CheckpointManager
     ├── dsl/            Keyword parser: NEW BRANCH, PUSH, PR, ATTENTION_HERE, RUN_TEST…
@@ -454,11 +463,11 @@ golovebox/
     ├── gateway/        Handler interface, Gateway router, TelegramHandler
     ├── llm/            HTTP client, OpenAI-compat + Anthropic header, retry backoff
     ├── memory/         chromem-go wrapper, per-agent isolated collections
-    ├── orchestrator/   Specs → DAG via LLM; sync_repo auto-injection; run_mode prompt
-    ├── sandbox/        qemu.go, qmp.go, ssh.go, pool.go
+    ├── orchestrator/   Specs → DAG via LLM; sync_repo auto-injection (workflowRepo fallback); self-contained tasks; run_mode prompt
+    ├── sandbox/        qemu.go, qmp.go, ssh.go, pool.go (keepalive + fresh-dial retry)
     ├── setup/          7-step init wizard (idempotent)
     ├── skills/         Local registry + LLM generator
-    ├── tools/          shell.go (stall detection), files.go, git.go, github.go
+    ├── tools/          shell.go (stall detection), files.go, git.go (SyncRepo + persistent credentials), github.go
     └── web/
         ├── server.go   chi router, handlers, SSE broker, WebSocket terminal
         ├── store.go    RunStore — cancelMap, NodeLogFor, RunMeta
@@ -472,23 +481,30 @@ golovebox/
 
 ## Phase roadmap
 
-### V0 — Portable Coding Workflow
+### V0 — Portable Coding Workflow ✅ Complete
 
-| Phase | Status | Summary |
-|---|---|---|
-| 1 | ✅ | Foundation — CLI, config, QEMU sandbox, SSH/SFTP, init wizard |
-| 2 | ✅ | Agent — ReAct loop, LLM client, GitHub tools, vector memory |
-| 3 | ✅ | Gateway — Telegram bot, SSH pool, GIT_ASKPASS, LLM retry |
-| 4 | ✅ | Platform — DAG orchestrator, web chat, skills, parallel execution |
-| 5 | ✅ | Self-contained — embedded QEMU + Alpine, Mage pipeline |
-| 6 | ✅ | QEMU extraction fix — weilnetz.de installer, silent NSIS, SHA512, flat layout |
-| 7 | ✅ | Alpine NoCloud cloud image + silent boot + reset + config reuse + sshd drop-in |
-| 8 | ✅ | Observability — health dashboard, manual task input, session persistence, ReAct stream per node |
-| 9 | ✅ | UX + bugs — task visible in chat/panel, stop button, clear errors, canvas polish, params in log |
-| 10 | 🔜 | UI Refactor — Alpine.js replaces imperative JS; 4 isolated components |
-| 11 | 🔜 | Refactor — Canvas2D→Cytoscape, net/http→chi, fmt→slog, marked.js, highlight.js |
-| 12 | 🔜 | VM in browser — SSH terminal (WebSocket + xterm.js) + SFTP file explorer |
-| 13 | 🔜 | Workflow DSL — NEW BRANCH, PUSH, PR, sync_repo pre-step, stall detection |
+All 18 phases delivered. See [`.ai/FASES.json`](.ai/FASES.json) for the full digest of decisions, libraries, learnings, and known open issues.
+
+| Phase | Summary |
+|---|---|
+| 1 | Foundation — CLI, config, QEMU sandbox, SSH/SFTP, init wizard |
+| 2 | Agent — ReAct loop, LLM client, GitHub tools, vector memory |
+| 3 | Gateway — Telegram bot, SSH pool, `GIT_ASKPASS`, LLM retry |
+| 4 | Platform — DAG orchestrator, web chat, skills, parallel execution |
+| 5 | Self-contained — embedded QEMU + Alpine, Mage pipeline |
+| 6 | QEMU extraction fix — weilnetz.de installer, silent NSIS, SHA512, flat layout |
+| 7 | Alpine NoCloud cloud image + silent boot + reset + sshd drop-in |
+| 8 | Observability — health dashboard, manual task input, session persistence, ReAct stream per node |
+| 9 | UX + bugs — task visible, stop button, clear errors, canvas polish, params in log |
+| 10 | UI Refactor — Alpine.js replaces imperative JS; isolated components + stores |
+| 11 | Library swaps — Canvas2D→Cytoscape, `net/http`→chi, `fmt`→slog, marked.js, highlight.js |
+| 12 | VM in browser — SSH terminal (WebSocket + xterm.js) + SFTP file explorer |
+| 13 | Workflow DSL — `NEW BRANCH`, `PUSH`, `PR`, `sync_repo` auto-injection, `ErrNeedsHuman` |
+| 14 | Bugfix BRANCH/PR — git identity via cloud-init, `repoCtx` in orchestrator prompt |
+| 15 | Bugfix `$HOME` / 404 / 503 — `.gitconfig` via `write_files`, graceful run degradation, `IsVMReady` probe |
+| 16 | UX & observability — LLM prompt+reply persisted per iter, health auto-poll, branch in node panel |
+| 17 | Execution correctness — persistent `credential.helper=store`, heredoc `<<EOF` parser, self-contained tasks |
+| 18 | Residual fixes — pool dial retry, top-level `default_repo` fallback, auto-open node panel on error |
 
 ### V1 — TechLead
 

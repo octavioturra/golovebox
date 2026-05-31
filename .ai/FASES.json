@@ -1,0 +1,160 @@
+{
+  "_meta": {
+    "purpose": "Digest único de todas as fases V0 do golovebox. Substitui a leitura dos FASE_N.md individuais. Mantenha aqui apenas o que ainda informa o presente: decisões arquiteturais vivas, libs em uso, padrões enduring. Bugs já corrigidos viram aprendizado (não recipe).",
+    "source_history": ".ai/fases/FASE_N.md (versionado, leitura sob demanda)",
+    "digest_policy": "A cada 3-5 fases novas, releia os FASE_N.md recentes, atualize este JSON, e remova daqui o que se tornou obsoleto. Evite virar changelog — este é um mapa do estado atual.",
+    "last_digested_phase": 18,
+    "last_updated": "2026-05-31"
+  },
+
+  "phases": {
+    "v0_done": [
+      {"id": 1,  "name": "Portable Foundation",       "delivered": "CLI cobra, config TOML, paths relativos ao .exe, sandbox SSH inicial, init wizard"},
+      {"id": 2,  "name": "Agent Loop",                "delivered": "LLM HTTP client OpenAI-compat (sem SDK), ReAct loop texto puro, tools shell/files/github, memory chromem-go"},
+      {"id": 3,  "name": "Gateway",                   "delivered": "Telegram bot, SSH pool, GIT_ASKPASS com UUID, LLM retry+jitter, ProgressFunc nil-safe"},
+      {"id": 4,  "name": "Orchestrator + Web Chat",   "delivered": "DSL parser, DAG types+executor paralelo, CheckpointManager race-free, web/server.go + SSE, skills (TOML frontmatter)"},
+      {"id": 5,  "name": "Self-Contained Binary",     "delivered": "embed.FS de QEMU + Alpine, mage pipeline, cloud-init NoCloud ISO via kdomanski/iso9660"},
+      {"id": 6,  "name": "QEMU Extraction Fix",       "delivered": "weilnetz.de installer (não MSYS2), 7-zip baixado automático, layout flat sem bin/"},
+      {"id": 7,  "name": "Alpine NoCloud + Boot Silencioso", "delivered": "qcow2 cloud image (não Virt ISO), boot direto sem install, stdout→qemu.log, golovebox reset"},
+      {"id": 8,  "name": "Observabilidade",           "delivered": "/api/health (4 checks paralelos), input manual JSON /api/run, localStorage glb_run_id, NodeLog .jsonl"},
+      {"id": 9,  "name": "UX + Bugs Iniciais",        "delivered": "task.txt visível, stop button, params no log, canvas centralizado, snake_case nos IDs, run preview"},
+      {"id": 10, "name": "UI Refactor — Alpine.js",   "delivered": "Substituição de DOM imperativo por 4 componentes Alpine (healthPanel, chatPanel, runList, nodePanel) + stores"},
+      {"id": 11, "name": "Library Swaps",             "delivered": "chi router, slog stdlib, Cytoscape.js+dagre (não Canvas2D), marked.js, highlight.js"},
+      {"id": 12, "name": "VM no Browser",             "delivered": "Terminal SSH via WebSocket+xterm.js, file explorer SFTP read-only, bottom panel com tabs"},
+      {"id": 13, "name": "Workflow DSL",              "delivered": "NEW BRANCH/PUSH/PR keywords, TypeSyncRepo auto-injetado, ErrNeedsHuman → waiting_human, run_meta.json (current_branch)"},
+      {"id": 14, "name": "Bugfix BRANCH/PR",          "delivered": "git identity via cloudinit, repoCtx no prompt do orchestrator, regras git explícitas"},
+      {"id": 15, "name": "Bugfix $HOME / 404 / 503",  "delivered": ".gitconfig via write_files (não runcmd), handleGetRun degrada se dag.json ausente, IsVMReady probe, terminal dial retry"},
+      {"id": 16, "name": "UX & Observabilidade",      "delivered": "Prompt+reply do LLM persistidos por iter no NodeLog, health auto-poll 5s, branch no nodePanel, terminal espera IsVMReady"},
+      {"id": 17, "name": "Execução Correta",          "delivered": "credential.helper=store + ~/.git-credentials persistente, parseAction heredoc <<EOF, orchestrator gera task auto-contida"},
+      {"id": 18, "name": "Bugfix Residuais",          "delivered": "Pool.Acquire retry dial 4×, fallback workflowRepo (top-level→workflow), SyncRepo mkdir -p parent, auto-abre nodePanel em erro"}
+    ],
+    "v1_planned": [
+      {"id": "v1_fase1", "name": "CLI Delegation",     "scope": "CodingAgent interface (Claude Code/Codex/Gemini adapters), delegate_code + verify_implementation tools, .ai/ convention, VM cloud-init instala CLI configurado"},
+      {"id": "v1_fase2", "name": "Project Memory",     "scope": ".ai/ como memória viva, CONTEXT.md/DECISIONS.md gerados, vector search sobre .ai/, hierarquia global→projeto→versão→task"},
+      {"id": "v1_fase3", "name": "Communication Layer","scope": "Slack/email/calendar tools, templates por evento"},
+      {"id": "v1_fase4", "name": "PM Integration",     "scope": "GitHub Issues/Jira/Linear como input, status updates, auto-close on merge"},
+      {"id": "v1_fase5", "name": "Learning Loop",      "scope": "Reflection pós-task, spec templates evolutivos, ranking de CLI por tipo de task"}
+    ]
+  },
+
+  "enduring_decisions": {
+    "architecture": {
+      "no_cgo": "CGO_ENABLED=0 sempre. Portabilidade total, sem MinGW no Windows. Build via mage.",
+      "portable_app": "Todos os paths relativos ao executável: baseDir = filepath.Join(filepath.Dir(execPath), '.golovebox'). Zero escrita fora do baseDir.",
+      "embed_fs_for_assets": "QEMU + Alpine qcow2 + static/ no binário via //go:embed. Placeholder.txt nos dirs vazios (Go embed ignora . e _).",
+      "react_loop_text_format": "Thought/Action/Parameters em texto puro — portável entre Anthropic/OpenAI/Ollama/Gemini sem features específicas de provider. Heredoc <<EOF para valores multilinha (FASE 17).",
+      "md_first_memory": ".ai/ é fonte de verdade do projeto — Markdown legível, portável, versionável. Vetores são derivados.",
+      "orchestrate_dont_implement": "V1: golovebox coordena, CLIs implementam. .ai/specs/ ← golovebox; src/ + .ai/reports/ ← CLI."
+    },
+    "backend": {
+      "router": "chi v5 — sub-routers por domínio, middleware.Recoverer, chi.URLParam. Substituiu http.ServeMux na FASE 11.",
+      "logging": "log/slog stdlib — TextHandler em dev, JSONHandler com --log-format json. Flags --log-level/--log-format em PersistentPreRun.",
+      "llm_client": "HTTP client próprio (não SDK). BaseURL+Model swappáveis. Retry exponential backoff com jitter. statusError para errors.As. Anthropic header automático.",
+      "ssh_pool": "sandbox.Pool com keepalive validation no Acquire (descarta stale). Dial fresh retry 4× com backoff linear ~3.7s total (FASE 18) para sobreviver ao rc-service sshd restart do cloud-init.",
+      "dag_executor": "Paralelo até N nodes simultâneos. Persist atômico via os.Rename de dag.json.tmp. Resume relê estado consistente. ErrNeedsHuman wrappa erros que viram waiting_human.",
+      "checkpoint_pre_buffering": "CheckpointManager.Approve/Reject e Wait compartilham channel via pending[nodeID]. Approve antes de Wait? Channel pré-criado com valor pronto. Zero-CPU blocking, sem sleep/polling.",
+      "vm_silenciosa": "QEMU stdout/stderr → vm/qemu.log; stdin → os.DevNull. Terminal do host nunca invadido. -nographic preservado.",
+      "boot_device_explicito": "if=none,id=disk0 + device virtio-blk-pci,drive=disk0,bootindex=0 + -boot order=c. SeaBIOS sem ambiguidade entre disco, CIDATA e iPXE.",
+      "qcow2_magic_validation": "sandbox.Start lê 4 bytes e exige magic QFI\\xfb antes de subir QEMU. Erro claro ('delete and re-init') em vez de loop esperando boot."
+    },
+    "frontend": {
+      "alpine_js": "4 componentes (healthPanel/chatPanel/runList/nodePanel) + 2 (terminalPanel/filePanel/checkpointDialog). Sem build step. Zero `document.getElementById`.",
+      "cytoscape_dagre": "DAG via Cytoscape + cytoscape-dagre layout TB. Live updates via cy.getElementById(id).data() — sem re-render completo. Substituiu Canvas2D na FASE 11.",
+      "sse_outside_alpine": "EventSource em vanilla JS. Traduz mensagens em CustomEvents que componentes Alpine escutam via @evento.window. Acoplamento zero.",
+      "xterm_websocket": "xterm.js + FitAddon. WebSocket /ws/terminal vira SSH PTY (24×80 xterm-256color). Resize via JSON message → session.WindowChange.",
+      "node_panel_rich": "Prompt + reply crus do LLM persistidos por iter (FASE 16) — blocos colapsáveis no painel direito. Branch atual exibido. Auto-abre em erro (FASE 18)."
+    },
+    "git_workflow": {
+      "git_askpass_uuid": "Script em /tmp/.glb_askpass_<uuid>.sh — token nunca em URL nem em ps. UUID evita colisão entre runs paralelos.",
+      "credential_helper_persistent": "Cloud-init grava [credential] helper=store no .gitconfig. Após clone, writeGitCredentials() persiste /root/.git-credentials (0600) com https://x-token:TOKEN@github.com. Qualquer `git push` via shell tool autentica sem GIT_ASKPASS (FASE 17).",
+      "sync_repo_auto_injected": "Orchestrator injeta sync_repo como primeiro node quando workflowRepo(cfg) != ''. Fallback: cfg.Workflow.DefaultRepo → cfg.DefaultRepo. Todos os nodes raiz dependem dele (FASE 13/18).",
+      "branch_per_task": "TypeBranch dispatch escreve current_branch em run_meta.json. TypePush e TypePR leem de lá. ExecPR detecta PR open existente e atualiza body em vez de criar duplicata."
+    }
+  },
+
+  "current_libraries": {
+    "go_backend": [
+      {"lib": "spf13/cobra",                          "purpose": "CLI subcomandos"},
+      {"lib": "BurntSushi/toml",                      "purpose": "config.toml + skill frontmatter"},
+      {"lib": "go-chi/chi/v5",                        "purpose": "HTTP router com sub-routers"},
+      {"lib": "log/slog (stdlib)",                    "purpose": "Logging estruturado"},
+      {"lib": "golang.org/x/crypto/ssh + pkg/sftp",   "purpose": "SSH/SFTP para a VM"},
+      {"lib": "philippgille/chromem-go v0.7.0",       "purpose": "Vetores em .golovebox/memory/"},
+      {"lib": "google/go-github/v60",                 "purpose": "Issues + PRs"},
+      {"lib": "kdomanski/iso9660 v0.4.0",             "purpose": "Criar CIDATA ISO9660 (pure Go, sem CGO)"},
+      {"lib": "magefile/mage",                        "purpose": "Build pipeline + fetch assets"},
+      {"lib": "go-telegram-bot-api/v5 v5.5.1",        "purpose": "Telegram gateway"},
+      {"lib": "gorilla/websocket v1.5.3",             "purpose": "WebSocket terminal bridge"},
+      {"lib": "google/uuid v1.6.0",                   "purpose": "UUID para askpass paths e run IDs"}
+    ],
+    "frontend_cdn": [
+      "Alpine.js v3 (reatividade)",
+      "Cytoscape.js v3 + cytoscape-dagre v2 (DAG)",
+      "marked.js v12 (markdown no chat)",
+      "highlight.js v11.9 + tema github-dark (syntax highlight no node log)",
+      "xterm.js v5 + xterm-addon-fit v0.8 (terminal)"
+    ]
+  },
+
+  "runtime_layout": {
+    ".golovebox/": {
+      "config.toml": "Setup wizard ou edit manual",
+      "qemu/": "Flat: qemu-system-x86_64.exe + ~100 DLLs + share/qemu/",
+      "vm/": "base.img (Alpine qcow2 ~164MB), cidata.iso, id_rsa/.pub, qemu.log, .alpine-image-size (marker idempotência)",
+      "memory/": "chromem-go vetores persistentes",
+      "skills/": "TOML frontmatter + prompt freeform",
+      "runs/<id>/": {
+        "dag.json": "Estado persistido (atômico via rename)",
+        "node_states.json": "Estados por node",
+        "task.txt": "Task original do usuário",
+        "run_meta.json": "current_branch e outros KV",
+        "logs/<nodeID>.jsonl": "NodeLog append-only com iter/action/params/obs/prompt/reply/ts",
+        "logs/<nodeID>.log": "Log texto plano (compat)",
+        "artifacts/tech_debt.md": "NOT_TODO items"
+      }
+    },
+    "<repo>/.ai/ (V1)": {
+      "CONTEXT.md": "Contexto permanente do projeto",
+      "DECISIONS.md": "ADRs",
+      "specs/<feature>.md": "Spec do golovebox antes de delegar",
+      "reports/<feature>.md": "Report do CLI após implementação",
+      "tasks/<TASK_ID>.md": "Síntese pós-run"
+    }
+  },
+
+  "learnings": {
+    "process": [
+      "Bug fix phases (15/16/17/18) emergiram do uso real, não do plano. Aceitar isso — a sequência V0 não é linear.",
+      "Cada bug físico (handshake, write_file vazio, push sem auth) revelou camada arquitetural inteira que ainda não estava madura. Não trate como 'bug pontual'.",
+      "Quando um node erra, abrir UI no node imediatamente vale mais que mostrar log denso em outro lugar (FASE 18).",
+      "Persistir prompt+reply crus do LLM por iter (FASE 16) foi mais útil que streaming token-a-token. Usuário quer auditar, não acompanhar caractere a caractere."
+    ],
+    "technical": [
+      "embed.FS ignora arquivos começando com . ou _ — sempre usar placeholder.txt em dirs que precisam existir mesmo vazios.",
+      "Pool.Acquire que valida idle conn via keepalive ainda fura no dial fresh — handshake fresco pode falhar durante rc-service sshd restart do cloud-init. Solução: retry dial.",
+      "GIT_ASKPASS resolve clone mas não pushes subsequentes feitos via shell tool. Credential helper persistente é o fix correto (FASE 17).",
+      "parseAction linha-a-linha quebra qualquer content multilinha. Heredoc <<EOF é a sintaxe robusta e compatível.",
+      "Cloud-init runcmd não tem $HOME — usar write_files para .gitconfig em vez de git config --global no runcmd (FASE 15).",
+      "Tasks geradas pelo orchestrator precisam ser AUTO-CONTIDAS — o agent loop não sabe o objetivo original do usuário senão (FASE 17). BAD/GOOD examples no prompt funcionam melhor que regras abstratas.",
+      "Quando workflow.default_repo é vazio mas top-level default_repo está setado, sync_repo precisa de fallback explícito (FASE 18 — workflowRepo helper).",
+      "stdout do QEMU + stdin de getty: redirecionar stdout/stderr para log file E stdin para os.DevNull. Sem isso, getty bloqueia esperando input ou invade o terminal do host (FASE 7)."
+    ]
+  },
+
+  "non_goals_explicit": [
+    "Não usar SDK da Anthropic — HTTP próprio é mais portável entre providers (FASE 2).",
+    "Não usar Mermaid no DAG — Cytoscape permite updates incrementais via .data() sem re-render (FASE 11).",
+    "Não usar htmx — backend retorna JSON, Alpine.js casa melhor (FASE 10).",
+    "Não cross-compilar para macOS a partir de Linux — FetchDarwin requer execução em macOS (FASE 6).",
+    "Não implementar auto-resolve de conflito git — manual via waiting_human (FASE 13).",
+    "Não suportar UEFI ou ARM no V0 — BIOS x86_64 apenas (FASE 7)."
+  ],
+
+  "known_open_issues": [
+    "Tamanho do binário Windows ~450MB (QEMU + Alpine qcow2 embed). Trade-off aceitável.",
+    "TCG sem KVM no Windows: first boot ~1m42s. Em Linux com KVM: ~10s. Sem solução portable.",
+    "Cloud-init no second boot não reaplica — precisa golovebox reset && init para mudanças no cidata.iso.",
+    "Sem auth no /ws/terminal e SSE — assumido uso local (localhost:8080). V1 adicionará token-based auth.",
+    "Sem rate limit em mensagens de progresso do Telegram — risco de bloqueio acima de 1 msg/s/chat."
+  ]
+}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/pkg/sftp"
@@ -31,6 +32,17 @@ type FileEntry struct {
 
 // handleTerminal bridges a WebSocket connection to an SSH PTY on the VM.
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
+	// Wait up to ~5s for the VM to be ready before upgrading — avoids the
+	// "conectado → desconectado em 1s" race when the page opens right after boot.
+	for _, d := range []time.Duration{0, 250, 500, 1000, 2000} {
+		if d > 0 {
+			time.Sleep(d * time.Millisecond)
+		}
+		if s.gw.IsVMReady() {
+			break
+		}
+	}
+
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error("ws terminal upgrade", "error", err)
@@ -38,7 +50,18 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	sshConn, err := s.gw.AcquireSSH(r.Context())
+	// Retry SSH dial up to 3× with 500ms backoff — handles stale pool connections
+	// and race between browser connect and VM finishing boot.
+	var sshConn *ssh.Client
+	for attempt := 1; attempt <= 3; attempt++ {
+		sshConn, err = s.gw.AcquireSSH(r.Context())
+		if err == nil {
+			break
+		}
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		}
+	}
 	if err != nil {
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("erro: VM não disponível\r\n"))
 		return
@@ -147,6 +170,12 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 
 // handleVMFiles lists a directory on the VM via SFTP.
 func (s *Server) handleVMFiles(w http.ResponseWriter, r *http.Request) {
+	if !s.gw.IsVMReady() {
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, `{"error":"vm_not_ready"}`, http.StatusServiceUnavailable)
+		return
+	}
+
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		path = "/root"
