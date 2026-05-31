@@ -7,18 +7,26 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+type WorkflowConfig struct {
+	DefaultRepo   string `toml:"default_repo"`
+	ClonePath     string `toml:"clone_path"`
+	RunMode       string `toml:"run_mode"`       // "build_only" | "full"
+	DefaultBranch string `toml:"default_branch"`
+}
+
 type Config struct {
-	LLMProvider   string `toml:"llm_provider"`
-	LLMBaseURL    string `toml:"llm_base_url"`
-	LLMModel      string `toml:"llm_model"`
-	APIKey        string `toml:"api_key"`
-	GitHubToken   string `toml:"github_token"`
-	TelegramToken string `toml:"telegram_token"`
-	DefaultRepo   string `toml:"default_repo"` // "owner/repo" used when Telegram message omits repo
-	QEMUPath      string `toml:"qemu_path"`
-	VMPath        string `toml:"vm_path"`
-	SSHPort       int    `toml:"ssh_port"`
-	QMPPort       int    `toml:"qmp_port"`
+	LLMProvider   string         `toml:"llm_provider"`
+	LLMBaseURL    string         `toml:"llm_base_url"`
+	LLMModel      string         `toml:"llm_model"`
+	APIKey        string         `toml:"api_key"`
+	GitHubToken   string         `toml:"github_token"`
+	TelegramToken string         `toml:"telegram_token"`
+	DefaultRepo   string         `toml:"default_repo"` // "owner/repo" used when Telegram message omits repo
+	QEMUPath      string         `toml:"qemu_path"`
+	VMPath        string         `toml:"vm_path"`
+	SSHPort       int            `toml:"ssh_port"`
+	QMPPort       int            `toml:"qmp_port"`
+	Workflow      WorkflowConfig `toml:"workflow"`
 }
 
 var providerBaseURLs = map[string]string{
@@ -113,7 +121,20 @@ func Load() (*Config, error) {
 	if _, err := toml.DecodeFile(cf, cfg); err != nil {
 		return nil, err
 	}
+	cfg.applyDefaults()
 	return cfg, nil
+}
+
+func (c *Config) applyDefaults() {
+	if c.Workflow.ClonePath == "" {
+		c.Workflow.ClonePath = "/root/repo"
+	}
+	if c.Workflow.RunMode == "" {
+		c.Workflow.RunMode = "build_only"
+	}
+	if c.Workflow.DefaultBranch == "" {
+		c.Workflow.DefaultBranch = "main"
+	}
 }
 
 func Save(cfg *Config) error {

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/user/golovebox/internal/dag"
@@ -15,7 +17,11 @@ import (
 
 // RunStore manages run directories under .golovebox/runs/.
 type RunStore struct {
-	runsDir string
+	runsDir    string
+	logsMu     sync.Mutex
+	nodeLogs   map[string]*NodeLog // key: runID+"/"+nodeID
+	cancelMu   sync.Mutex
+	cancelMap  map[string]context.CancelFunc
 }
 
 // NewRunStore creates a RunStore, making sure runsDir exists.
@@ -23,7 +29,71 @@ func NewRunStore(runsDir string) (*RunStore, error) {
 	if err := os.MkdirAll(runsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("runstore: mkdir %s: %w", runsDir, err)
 	}
-	return &RunStore{runsDir: runsDir}, nil
+	return &RunStore{
+		runsDir:   runsDir,
+		nodeLogs:  make(map[string]*NodeLog),
+		cancelMap: make(map[string]context.CancelFunc),
+	}, nil
+}
+
+// RegisterRun stores a cancel func for an active run.
+func (rs *RunStore) RegisterRun(runID string, cancel context.CancelFunc) {
+	rs.cancelMu.Lock()
+	rs.cancelMap[runID] = cancel
+	rs.cancelMu.Unlock()
+}
+
+// UnregisterRun removes the cancel func when a run finishes.
+func (rs *RunStore) UnregisterRun(runID string) {
+	rs.cancelMu.Lock()
+	delete(rs.cancelMap, runID)
+	rs.cancelMu.Unlock()
+}
+
+// CancelRun cancels a run if it is still active.
+func (rs *RunStore) CancelRun(runID string) bool {
+	rs.cancelMu.Lock()
+	cancel, ok := rs.cancelMap[runID]
+	rs.cancelMu.Unlock()
+	if ok {
+		cancel()
+	}
+	return ok
+}
+
+// GetNodeLog returns log entries for a node. Returns in-memory entries if available
+// and non-empty; otherwise falls back to reading the .jsonl file from disk.
+func (rs *RunStore) GetNodeLog(runID, nodeID string) []NodeLogEntry {
+	key := runID + "/" + nodeID
+	rs.logsMu.Lock()
+	nl, exists := rs.nodeLogs[key]
+	rs.logsMu.Unlock()
+
+	if exists {
+		entries := nl.Entries()
+		if len(entries) > 0 {
+			return entries
+		}
+	}
+	// Fall back to disk (e.g. after process restart or when buffer is empty).
+	entries, _ := loadNodeLogFromDisk(nodeID, rs.RunDir(runID))
+	if entries == nil {
+		return []NodeLogEntry{}
+	}
+	return entries
+}
+
+// NodeLogFor returns the in-memory NodeLog for the given run+node, creating it on first call.
+func (rs *RunStore) NodeLogFor(runID, nodeID string) *NodeLog {
+	key := runID + "/" + nodeID
+	rs.logsMu.Lock()
+	defer rs.logsMu.Unlock()
+	if nl, ok := rs.nodeLogs[key]; ok {
+		return nl
+	}
+	nl := newNodeLog(nodeID, rs.RunDir(runID))
+	rs.nodeLogs[key] = nl
+	return nl
 }
 
 // NewRun creates the directory tree for a new run and returns the run ID.
@@ -75,6 +145,47 @@ type RunMeta struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	State     string    `json:"state"`
+	Task      string    `json:"task,omitempty"`
+}
+
+// SetRunMeta persists a key-value pair for a run in run_meta.json.
+func (rs *RunStore) SetRunMeta(runID, key, value string) {
+	path := filepath.Join(rs.RunDir(runID), "run_meta.json")
+	meta := rs.readRunMeta(path)
+	meta[key] = value
+	if data, err := json.Marshal(meta); err == nil {
+		_ = atomicWriteStore(path, data)
+	}
+}
+
+// GetRunMeta returns a stored meta value for a run (empty string if absent).
+func (rs *RunStore) GetRunMeta(runID, key string) string {
+	path := filepath.Join(rs.RunDir(runID), "run_meta.json")
+	return rs.readRunMeta(path)[key]
+}
+
+func (rs *RunStore) readRunMeta(path string) map[string]string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return make(map[string]string)
+	}
+	m := make(map[string]string)
+	_ = json.Unmarshal(data, &m)
+	return m
+}
+
+func atomicWriteStore(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// ReadTask returns the task string stored in task.txt (empty string if absent).
+func (rs *RunStore) ReadTask(runID string) string {
+	data, _ := os.ReadFile(filepath.Join(rs.RunDir(runID), "task.txt"))
+	return strings.TrimSpace(string(data))
 }
 
 // ListRuns returns metadata for all runs, newest first.
@@ -92,6 +203,12 @@ func (rs *RunStore) ListRuns() ([]RunMeta, error) {
 		meta := RunMeta{ID: e.Name(), State: "done"}
 		if info != nil {
 			meta.CreatedAt = info.ModTime()
+		}
+		if t := rs.ReadTask(e.Name()); t != "" {
+			if len(t) > 60 {
+				t = t[:60] + "..."
+			}
+			meta.Task = t
 		}
 		// Infer state from dag.json if present.
 		if data, err := os.ReadFile(filepath.Join(rs.runsDir, e.Name(), "dag.json")); err == nil {

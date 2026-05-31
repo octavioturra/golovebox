@@ -1,32 +1,38 @@
 # golovebox — Product Requirements Document
 
-**Versão:** 0.1 — V0  
-**Status:** Em planejamento
+**Versão:** 0.2 — V0 completo + V1 planejado
+**Status:** V0 phases 1-9 entregues. Phases 10-13 em spec. V1 em planejamento.
 
 ---
 
 ## 1. Problema
 
-Ferramentas de agente autônomo existentes (OpenClaw, Hermes, OpenHands, Manus) têm um problema em comum: dependências pesadas. Python com 300 bibliotecas onde sempre tem uma que quebra em alguma versão. Node.js. Docker. Daemons rodando em background. Instaladores que escrevem em `C:\` sem pedir licença.
+Ferramentas de agente autônomo existentes (OpenHands, Devin, Manus) têm dois problemas:
 
-O desenvolvedor quer focar em resolver issues, não em manter ambiente.
+**Problema 1 — Dependências pesadas:**
+Python com 300 bibliotecas onde sempre tem uma que quebra. Node.js. Docker. Daemons rodando em background. Instaladores que escrevem em `C:\` sem pedir licença.
+
+**Problema 2 — Escopo estreito:**
+Escrevem código. Só isso. Não sabem comunicar o time, atualizar o Jira, mandar o relatório pro cliente, agendar o teste com o QA. O desenvolvedor ainda precisa fazer toda a coordenação manualmente.
 
 ---
 
 ## 2. Solução
 
-`golovebox.exe` — um único arquivo executável, portable, que você copia para qualquer pasta em qualquer drive e roda. Sem instalação. Sem Python. Sem Node. Sem Docker. Sem admin.
+`golovebox.exe` — um único arquivo executável, portable, que você copia para qualquer pasta e roda. Sem instalação. Sem Python. Sem Node. Sem Docker. Sem admin.
 
-Na primeira execução ele mesmo configura tudo que precisa, dentro da própria pasta.
+**V0:** Agente de codificação portable. Escreve código, cria branches, abre PRs.
+
+**V1:** TechLead autônomo. Para de escrever código — especifica, delega para CLIs de código (Claude Code, Codex, Gemini CLI), verifica o resultado, e mantém todo mundo informado.
 
 ---
 
 ## 3. Usuário Alvo
 
-Desenvolvedor individual ou pequeno time que:
+Desenvolvedor individual ou pequeno time (3-8 pessoas) que:
 - Trabalha com repositórios GitHub
-- Quer automação de issues e PRs sem supervisão constante
-- Usa Telegram/Slack para comunicação
+- Quer features virarem PRs sem supervisão constante
+- Quer clientes e stakeholders atualizados sem overhead manual
 - Valoriza controle sobre o ambiente (self-hosted, dados locais)
 - Desenvolve no Windows
 
@@ -39,34 +45,54 @@ Desenvolvedor individual ou pequeno time que:
 | Python + pip + venv = inferno de versões | Binário único, zero dependências |
 | Instala coisa em `C:\` sem perguntar | Tudo em `.golovebox/` ao lado do `.exe` |
 | Docker obrigatório para sandbox | QEMU embutido, instalado automaticamente |
-| Configuração complexa | `golovebox init` interativo resolve tudo |
-| Dados na nuvem de terceiros | Self-hosted, dados ficam na máquina |
+| Agentes escrevem código mas não coordenam | TechLead que especifica, delega, verifica, comunica |
+| Contexto do projeto perdido entre sessões | `.ai/` no repo — memória viva, versionável, portável |
+| Stakeholders precisam ser atualizados manualmente | Slack, email, calendário automáticos (V1) |
 
 ---
 
-## 5. Casos de Uso V0
+## 5. Casos de Uso
 
-### UC1 — Resolver Issue via Telegram
+### UC1 — Task via web UI (V0)
 ```
-Usuário envia: "@golovebox issue #42"
-→ Agente lê a issue no GitHub
-→ Clona o repo na VM isolada
-→ Implementa a solução
-→ Roda os testes
-→ Abre PR com descrição gerada
-→ Responde no Telegram: "PR #87 aberta: [link]"
-```
-
-### UC2 — Trigger direto via CLI
-```
-golovebox github --repo owner/repo --issue 42
-→ mesmo fluxo acima no terminal
+Usuário digita no chat: "implemente autenticação JWT no /api/auth"
+→ Orchestrator gera DAG com 4 nodes
+→ sync_repo: git pull do repo padrão
+→ NEW BRANCH feature/jwt-auth
+→ Agent escreve código na VM, roda testes
+→ PUSH + PR aberto
+→ Canvas mostra DAG verde, log ReAct visível no node panel
 ```
 
-### UC3 — Monitoramento contínuo
+### UC2 — Spec com 5 fases (V0)
+```
+Usuário faz upload de spec.md com keywords DSL
+→ DAG com nodes paralelos e checkpoints
+→ ATTENTION_HERE: canvas pausa em laranja, aguarda aprovação
+→ RUN_TEST: gate — só avança se testes passam
+→ PR com título e body gerados a partir da task
+```
+
+### UC3 — TechLead com CLI delegation (V1)
+```
+Issue aberta no Jira: "Feature: login social com Google"
+→ golovebox lê issue, entende .ai/CONTEXT.md do projeto
+→ escreve .ai/specs/google-oauth.md com contexto rico
+→ cria branch, sincroniza repo
+→ delega: claude code "implemente per .ai/specs/google-oauth.md"
+→ claude code implementa, documenta em .ai/reports/google-oauth.md
+→ golovebox verifica diff vs spec + testes
+→ push, PR aberto e linkado ao ticket Jira
+→ Jira: ticket → "in review"
+→ Slack: "@time PR #87 pronta para review"
+→ Email pro cliente: "login social disponível em staging"
+→ .ai/tasks/TASK_042.md documentado com síntese
+```
+
+### UC4 — Monitoramento contínuo (V0/V1)
 ```
 golovebox daemon
-→ fica escutando Telegram/Slack/Email
+→ escuta Telegram/Slack
 → age conforme triggers chegam
 → reporta progresso no canal de origem
 ```
@@ -75,156 +101,277 @@ golovebox daemon
 
 ## 6. Arquitetura
 
+### V0 — hoje
+
 ```
-┌─────────────────────────────────────────────┐
-│                golovebox.exe                │
-│                                             │
-│  ┌──────────┐    ┌─────────────────────┐   │
-│  │ Gateway  │    │    Agent Loop       │   │
-│  │          │───▶│  (ReAct pattern)    │   │
-│  │ Telegram │    │                     │   │
-│  │ Slack    │    │  think → plan → act │   │
-│  │ Email    │    └──────────┬──────────┘   │
-│  │ CLI      │               │               │
-│  └──────────┘         tools │               │
-│                             ▼               │
-│  ┌──────────┐    ┌─────────────────────┐   │
-│  │ Memory   │◀──▶│       Tools         │   │
-│  │          │    │  shell / files      │   │
-│  │ chromem  │    │  github / browser   │   │
-│  │ vectors  │    │  email / slack      │   │
-│  └──────────┘    └──────────┬──────────┘   │
-│                             │ SSH/SFTP      │
-└─────────────────────────────┼───────────────┘
-                              │
-                    ┌─────────▼──────────┐
-                    │   QEMU Alpine VM   │
-                    │                   │
-                    │  git  go  python  │
-                    │  node  gcc  make  │
-                    └───────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                    golovebox.exe                     │
+│                                                      │
+│  ┌──────────┐    ┌────────────────────────────────┐ │
+│  │ Gateway  │    │         Orchestrator           │ │
+│  │ Telegram │───▶│   spec → DAG → executor        │ │
+│  │ Web UI   │    └──────────────┬─────────────────┘ │
+│  │ CLI      │                   │                    │
+│  └──────────┘              nodes│                    │
+│                                 ▼                    │
+│  ┌──────────┐    ┌────────────────────────────────┐ │
+│  │ Memory   │◀──▶│         Agent Loop             │ │
+│  │ chromem  │    │   ReAct: thought/action/obs    │ │
+│  │ .ai/     │    │                                │ │
+│  └──────────┘    │   tools: shell, files, github  │ │
+│                  └──────────────┬─────────────────┘ │
+│                                 │ SSH / SFTP         │
+└─────────────────────────────────┼────────────────────┘
+                                  │
+                    ┌─────────────▼──────────────┐
+                    │       QEMU Alpine VM        │
+                    │  git  go  python  node      │
+                    │  gcc  make  curl  openssh   │
+                    └────────────────────────────┘
+```
+
+### V1 — TechLead
+
+```
+┌──────────────────────────────────────────────────────┐
+│                    golovebox.exe                     │
+│                                                      │
+│  ┌──────────┐    ┌────────────────────────────────┐ │
+│  │ Inputs   │    │         Orchestrator           │ │
+│  │ Jira     │───▶│   spec → DAG → executor        │ │
+│  │ GitHub   │    └──────────────┬─────────────────┘ │
+│  │ Web UI   │                   │                    │
+│  │ Telegram │              nodes│                    │
+│  └──────────┘                   ▼                    │
+│                  ┌────────────────────────────────┐  │
+│  ┌──────────┐    │      TechLead Agent Loop       │  │
+│  │ .ai/     │◀──▶│  read → specify → delegate     │  │
+│  │ specs/   │    │  verify → summarize            │  │
+│  │ reports/ │    └──────────────┬─────────────────┘  │
+│  │ tasks/   │                   │                    │
+│  └──────────┘            delegate│                   │
+│                                  ▼                   │
+│  ┌──────────┐    ┌────────────────────────────────┐ │
+│  │ Comms    │    │       CodingAgent              │ │
+│  │ Slack    │    │  ClaudeCode | Codex | Gemini   │ │
+│  │ Email    │    │  reads .ai/specs/              │ │
+│  │ Calendar │    │  writes src/ + .ai/reports/    │ │
+│  └──────────┘    └────────────────────────────────┘ │
+└──────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 7. Estrutura de Arquivos em Runtime
+## 7. Estrutura em Runtime
 
 ```
 D:\qualquer\pasta\
 ├── golovebox.exe
 └── .golovebox\
-    ├── config.toml          # configuração do usuário
-    ├── qemu\                # QEMU instalado aqui
+    ├── config.toml
+    ├── qemu\                    # flat: exe + DLLs + share/qemu/
     ├── vm\
-    │   └── base.img         # Alpine Linux VM
-    ├── memory\              # embeddings vetoriais
-    └── logs\                # logs por sessão
+    │   ├── base.img             # Alpine cloud qcow2 (~164MB)
+    │   ├── cidata.iso           # cloud-init seed
+    │   ├── id_rsa               # keypair SSH
+    │   └── qemu.log
+    ├── memory\                  # chromem-go vectors
+    ├── skills\                  # .md com frontmatter TOML
+    └── runs\<id>\
+        ├── dag.json
+        ├── node_states.json
+        ├── task.txt
+        └── logs\<nodeID>.jsonl
+
+repo\  (repositório do usuário)
+└── .ai\                         # território do golovebox no repo
+    ├── CONTEXT.md               # contexto permanente do projeto
+    ├── DECISIONS.md             # ADRs
+    ├── specs\<feature>.md       # golovebox escreve antes de delegar
+    ├── reports\<feature>.md     # CLI escreve após implementar (V1)
+    └── tasks\<TASK_ID>.md       # síntese após cada run
 ```
 
 ---
 
-## 8. Fluxo de Primeiro Boot
+## 8. Primeiro Boot
 
-`golovebox init` (executado automaticamente se `.golovebox/` não existir):
+`golovebox init` (idempotente — reusa config.toml se existir):
 
-1. Cria `.golovebox/` ao lado do `.exe`
-2. Baixa QEMU installer oficial (binário assinado) → instala em `.golovebox/qemu/`
-3. Baixa Alpine VM image (~300MB) → extrai em `.golovebox/vm/`
-4. Config interativo:
-   - Provider LLM (Claude / GPT / Gemini / Ollama)
-   - API key
+1. Extrai QEMU embutido → `.golovebox/qemu/` (flat layout)
+2. Extrai Alpine cloud qcow2 embutida → `.golovebox/vm/base.img`
+3. Gera keypair RSA 4096 → `.golovebox/vm/id_rsa`
+4. Constrói CIDATA ISO9660 com cloud-init
+5. Config wizard:
+   - Provider LLM + API key + modelo
    - GitHub token (escopo: `repo`)
+   - Repo padrão (`owner/repo`)
    - Telegram bot token (opcional)
-5. Smoke test: sobe VM → `echo ok` via SSH → imprime "golovebox pronto ✓"
+6. Boot QEMU silencioso (`stdout → vm/qemu.log`, `stdin → /dev/null`)
+7. Smoke test: poll SSH até `echo ok`
 
-Requer internet. Reexecutável via `golovebox init --repair`.
+Sem internet após o build. Reexecutável via `golovebox init --repair`.
 
 ---
 
 ## 9. Stack Técnica
 
+### Backend
+
 | Camada | Tecnologia | Justificativa |
 |---|---|---|
-| Linguagem | Go | Single binary, cross-platform, zero runtime |
-| CGO | Desabilitado | Sem dependência de gcc no Windows |
-| Gateway | sausheong/goclaw | Pure Go, Telegram/CLI, skill system |
-| Sandbox | QEMU | Único sandbox cross-platform real |
-| Controle VM | digitalocean/go-qemu (QMP) | Pure Go, JSON API sobre TCP |
-| Exec na VM | golang.org/x/crypto/ssh | Pure Go, SSH + SFTP |
-| Memória | philippgille/chromem-go | Pure Go, zero CGO, embedded |
-| GitHub | google/go-github | Client oficial |
-| Browser | go-rod/rod | Headless Chromium, auto-download |
+| Linguagem | Go 1.22+ | Single binary, CGO_ENABLED=0 |
+| CLI | spf13/cobra | Subcomandos, flags, help automático |
 | Config | BurntSushi/toml | Simples, pure Go |
-| CLI | spf13/cobra | Subcomandos padrão Go |
+| HTTP router | go-chi/chi/v5 | Sub-routers, middleware, WebSocket |
+| Logging | log/slog stdlib | Estruturado, text/json, zero dependência |
+| LLM | internal/llm | HTTP puro, OpenAI-compat, retry exponencial |
+| SSH/SFTP | golang.org/x/crypto/ssh + pkg/sftp | Pure Go |
+| WebSocket | gorilla/websocket | Terminal SSH no browser |
+| Memória vetorial | philippgille/chromem-go | Pure Go, zero CGO |
+| GitHub | google/go-github/v60 | Client oficial |
+| CIDATA ISO | github.com/kdomanski/iso9660 | Pure Go, zero CGO |
+| Build | github.com/magefile/mage | Build system em Go puro |
+| Telegram | go-telegram-bot-api/v5 | Gateway secundário |
+
+### Frontend (CDN, zero build step)
+
+| | |
+|---|---|
+| Reatividade | Alpine.js v3 |
+| DAG visual | Cytoscape.js v3 + cytoscape-dagre |
+| Terminal | xterm.js + addon-fit |
+| Markdown | marked.js |
+| Syntax highlight | highlight.js |
+
+**Regra absoluta:** `CGO_ENABLED=0`. Sem exceção.
 
 ---
 
 ## 10. Requisitos Funcionais
 
-### Coding Agent
-- Conectar repositório GitHub via personal access token
-- Listar e ler issues abertas
-- Clonar repo dentro da VM sandbox
-- Executar ciclo ReAct até solução ou timeout
-- Rodar testes dentro da VM
-- Abrir Pull Request com título e descrição gerados pelo agente
+### Orchestration (V0)
+- Converter spec Markdown com DSL em DAG executável
+- Executar nodes em paralelo (máx 3 simultâneos)
+- Pausar em `ATTENTION_HERE` e aguardar aprovação humana
+- Retomar run após crash (`golovebox resume <id>`)
+- Keywords: `NEW BRANCH`, `PUSH`, `PR`, `RUN_TEST`, `NOTIFY_ME`, `NOT_TODO`, `TRY/OR_ELSE`
 
-### Comms Gateway
-- Receber comandos via Telegram bot
-- Receber menções em canais Slack
-- Ler email via IMAP com trigger por subject pattern
-- Reportar progresso e resultado no canal de origem
+### Workflow Git (V0)
+- Sync automático do repo padrão a cada run (clone ou pull)
+- Criar branch via `NEW BRANCH`
+- Push com `--set-upstream` via `PUSH`
+- Abrir ou atualizar PR via `PR`
+- Detectar conflito de merge → `waiting_human` automático
 
-### Memória
-- Indexar estrutura e README do repo na primeira clonagem
-- Recuperar contexto relevante por similaridade antes de cada ciclo
-- Persistir entre sessões em `.golovebox/memory/`
+### Web UI (V0)
+- Health dashboard: VM, LLM, GitHub, Repo em tempo real
+- Input de task sem criar arquivo
+- Canvas DAG com Cytoscape — live update via SSE, sem re-render
+- Log ReAct por node em tempo real (iter, action, params, obs)
+- Terminal SSH interativo no browser (xterm.js)
+- File explorer da VM (SFTP read-only)
+- Sessão persistente via `localStorage`
+- Botão stop — cancela run ativo via context cancel
 
-### Sandbox
-- Instalar QEMU no primeiro boot em `.golovebox/qemu/`
-- Manter VM Alpine com toolchain: git, go, python, node, gcc, make, curl
-- Boot da VM no startup do daemon
-- Shutdown graceful da VM ao encerrar
+### CLI Delegation (V1)
+- Interface `CodingAgent` — swap entre Claude Code, Codex, Gemini
+- Tool `delegate_code` — spawn CLI com `.ai/specs/` como contexto
+- Tool `verify_implementation` — diff vs spec + testes
+- CLI instala na VM via cloud-init
+- Contrato: golovebox escreve `.ai/specs/`; CLI escreve `.ai/reports/`
+
+### Communication Layer (V1)
+- Slack: notifica ao iniciar, concluir, bloquear
+- Email: relatórios, updates para cliente
+- Calendário: agenda demos, reviews, testes
+- Templates configuráveis por projeto
+
+### PM Integration (V1)
+- GitHub Issues → input de task
+- Jira / Linear — lê e atualiza status conforme DAG avança
+- PR linkado ao ticket automaticamente
+- Sprint report gerado pelo golovebox
 
 ---
 
 ## 11. Requisitos Não-Funcionais
 
 - **Portabilidade:** zero escrita fora de `.golovebox/` ao lado do `.exe`
-- **Distribuição:** `.exe` único sem dependências pré-instaladas
-- **CGO:** proibido — `CGO_ENABLED=0` no build e CI
-- **Tamanho do `.exe`:** alvo ~30MB (VM image baixada no init, não embutida)
-- **LLM:** interface OpenAI-compatible — sem lock-in de provider
-- **Privacidade:** dados locais, sem telemetria
+- **Distribuição:** `.exe` único sem dependências pré-instaladas no host
+- **CGO:** `CGO_ENABLED=0` obrigatório — sem gcc no host Windows
+- **Tamanho do binário:** ~450MB (inclui QEMU + Alpine qcow2 embutidos)
+- **LLM:** interface OpenAI-compatible — zero lock-in de provider
+- **Privacidade:** dados locais, sem telemetria, sem conta em nuvem
+- **Resiliência:** run retomável após crash — `dag.json` + `node_states.json`
+- **Observabilidade:** log estruturado via `slog`, `--log-format json` no daemon
 
 ---
 
-## 12. Fora do Escopo V0
+## 12. DSL de Intenção
 
-- Multi-agent paralelo (um agente por repo simultâneo)
-- VS Code Server integrado
-- Interface web
-- Linux e macOS validados
+Prosa Markdown com keywords opcionais em MAIÚSCULAS. Legível por humano, parseável pelo orchestrator.
+
+| Keyword | Efeito no DAG |
+|---|---|
+| `NEW BRANCH <nome>` | node `branch` — `git checkout -b` |
+| `PUSH` | node `push` — `git push --set-upstream` |
+| `PR "título"` | node `pr` — cria ou atualiza PR |
+| `ATTENTION_HERE` | node `checkpoint` — pausa, aguarda aprovação humana |
+| `RUN_TEST` | node `gate` — só avança se testes passarem |
+| `NOTIFY_ME` | node `notify` — envia notificação e continua |
+| `NOT_TODO` | excluído do DAG, registrado em `tech_debt.md` |
+| `TRY ... OR_ELSE ...` | node `try_else` — fallback automático |
+
+---
+
+## 13. Fora do Escopo V0
+
+- CLI delegation (v1_fase1)
+- Slack / email / calendário
+- Jira / Linear
+- Linux/macOS production-tested
 - Auto-update do binário
-- Assinatura de código (Windows Defender)
-- Execução sem internet no primeiro boot
+- Code signing (Windows Defender)
+- Execução de servidores (`run_mode = build_only`)
+
+## Fora do Escopo V1
+
+- Mobile UI
+- ClaWHub — skill marketplace remoto
+- Multi-tenant / multi-user
+- Windows Defender signing
 
 ---
 
-## 13. Plano de Entrega V0
+## 14. Roadmap de Entrega
 
-| Fase | Semanas | Entregável |
+### V0 — Portable Coding Workflow
+
+| Phase | Status | Entregável |
 |---|---|---|
-| 1 — Fundação | 1-2 | `.exe` portable que instala QEMU, sobe VM, executa shell |
-| 2 — Agent Loop | 3-4 | Agente resolve issue simples e abre PR |
-| 3 — Gateway | 5-6 | Trigger e resposta via Telegram |
-| 4 — Polish | 7 | Usável por humano real no Windows |
+| 1-9 | ✅ | Foundation, Agent, Gateway, Platform, Binary, QEMU, VM, Observabilidade, UX |
+| 10 | 🔜 | UI Refactor — Alpine.js |
+| 11 | 🔜 | Refactor — Cytoscape + chi + slog |
+| 12 | 🔜 | Terminal SSH + File Explorer na web |
+| 13 | 🔜 | Workflow DSL — NEW BRANCH, PUSH, PR, sync_repo |
+
+### V1 — TechLead Autônomo
+
+| Fase | Entregável |
+|---|---|
+| v1_fase1 | CodingAgent interface, delegate_code, verify_implementation, .ai/ convention |
+| v1_fase2 | Project Memory — .ai/ como memória viva, hierarquia de contexto |
+| v1_fase3 | Communication Layer — Slack, email, calendário |
+| v1_fase4 | PM Integration — Jira, Linear, GitHub Issues |
+| v1_fase5 | Learning Loop — specs melhoram com uso |
 
 ---
 
-## 14. Definição de Pronto
+## 15. Definição de Pronto
 
-> Copiar `golovebox.exe` para qualquer pasta em qualquer drive Windows,
-> executar `golovebox init`, enviar `@golovebox issue #42` no Telegram,
-> e receber o link da PR aberta em resposta —
-> sem instalar nada no sistema além do que o próprio `init` baixa na pasta local.
+**V0:**
+> Copiar `golovebox.exe` para qualquer pasta Windows, rodar `golovebox init`, abrir `localhost:8080`, digitar uma task com 5 fases incluindo `NEW BRANCH`, `RUN_TEST` e `PR`, ver o DAG executar na VM, ver o log ReAct em tempo real, e receber o PR aberto no GitHub — sem instalar nada.
+
+**V1:**
+> Abrir uma issue no Jira. Golovebox lê, escreve `.ai/specs/`, delega ao Claude Code, Claude Code implementa e documenta em `.ai/reports/`, golovebox verifica, push, PR, atualiza Jira, manda Slack pro time e email pro cliente — sem tocar em uma linha de código.

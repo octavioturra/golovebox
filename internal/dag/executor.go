@@ -3,6 +3,7 @@ package dag
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -138,6 +139,26 @@ func (e *Executor) runNode(ctx context.Context, n *Node) {
 
 	result, err := e.dispatch(ctx, n)
 	if err != nil {
+		// Workflow errors that require human intervention pause the node
+		// and wait for checkpoint approval rather than failing permanently.
+		if errors.Is(err, ErrNeedsHuman) {
+			e.mu.Lock()
+			if n.Error == "" {
+				n.Error = err.Error()
+			}
+			if result != "" {
+				n.Result = result
+			}
+			e.mu.Unlock()
+			e.setStateWaiting(n)
+			approval := <-e.cm.Wait(n.ID)
+			if approval.Approved {
+				e.setStateDone(n, "approved by human after: "+n.Error)
+			} else {
+				e.setStateError(n, "rejected: "+approval.Reason)
+			}
+			return
+		}
 		e.setStateError(n, err.Error())
 	} else {
 		e.setStateDone(n, result)

@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -74,8 +74,7 @@ func (c *Client) Complete(ctx context.Context, messages []Message) (string, erro
 		}
 		lastErr = err
 		delay := retryDelay(c.cfg.BaseDelay, c.cfg.MaxDelay, attempt)
-		fmt.Fprintf(os.Stderr, "llm: attempt %d/%d failed: %v, retrying in %v\n",
-			attempt+1, c.cfg.MaxAttempts, err, delay)
+		slog.Warn("llm retry", "attempt", attempt+1, "max", c.cfg.MaxAttempts, "error", err, "delay", delay)
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()

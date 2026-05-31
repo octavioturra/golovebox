@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -29,10 +30,16 @@ import (
 )
 
 func main() {
+	var logLevel, logFormat string
 	root := &cobra.Command{
 		Use:   "golovebox",
 		Short: "Autonomous Go agent with QEMU sandbox",
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			initLogger(logFormat, logLevel)
+		},
 	}
+	root.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Log level: debug, info, warn, error")
+	root.PersistentFlags().StringVar(&logFormat, "log-format", "text", "Log format: text, json")
 	root.AddCommand(setup.NewInitCmd())
 	root.AddCommand(newExecCmd())     // renamed from "run" — executes a raw shell cmd in VM
 	root.AddCommand(newStatusCmd())
@@ -321,7 +328,7 @@ func newRunCmd() *cobra.Command {
 				Model:   cfg.LLMModel,
 			})
 			gw := gateway.New(pool, llmClient, cfg)
-			orch := orchestrator.New(llmClient, nil)
+			orch := orchestrator.New(llmClient, nil, cfg)
 
 			// Parse specs.
 			var specs []*dsl.ParsedSpec
@@ -369,7 +376,7 @@ func newRunCmd() *cobra.Command {
 				fmt.Printf("[%-14s] %s\n", node.State, node.ID)
 			}
 			dispatch := func(dCtx context.Context, node *dag.Node) (string, error) {
-				return gw.RunSpecTask(dCtx, node.Task, func(iter int, action, obs string) {
+				return gw.RunSpecTask(dCtx, node.Task, func(iter int, action, _, obs string) {
 					fmt.Printf("  [%d] %s: %s\n", iter, action, truncate(obs, 80))
 				})
 			}
@@ -461,7 +468,7 @@ func newWebCmd() *cobra.Command {
 				Model:   cfg.LLMModel,
 			})
 			gw := gateway.New(pool, llmClient, cfg)
-			orch := orchestrator.New(llmClient, nil)
+			orch := orchestrator.New(llmClient, nil, cfg)
 
 			skillsDir, err := cfg.SkillsDir()
 			if err != nil {
@@ -489,7 +496,7 @@ func newWebCmd() *cobra.Command {
 
 			go func() {
 				if err := srv.Start(ctx, addrFlag); err != nil {
-					fmt.Fprintf(os.Stderr, "web: %v\n", err)
+					slog.Error("web server error", "error", err)
 				}
 			}()
 			<-ctx.Done()
@@ -500,6 +507,28 @@ func newWebCmd() *cobra.Command {
 	cmd.Flags().StringVar(&addrFlag, "addr", ":8080", "HTTP listen address")
 	cmd.Flags().IntVar(&timeoutFlag, "timeout", 0, "VM start timeout in seconds (default 15)")
 	return cmd
+}
+
+func initLogger(format, level string) {
+	var lvl slog.Level
+	switch strings.ToLower(level) {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+	opts := &slog.HandlerOptions{Level: lvl}
+	var h slog.Handler
+	if strings.ToLower(format) == "json" {
+		h = slog.NewJSONHandler(os.Stderr, opts)
+	} else {
+		h = slog.NewTextHandler(os.Stderr, opts)
+	}
+	slog.SetDefault(slog.New(h))
 }
 
 func openBrowser(url string) {
@@ -638,7 +667,7 @@ func newResumeCmd() *cobra.Command {
 			runDir := store.RunDir(runID)
 
 			dispatch := func(dCtx context.Context, node *dag.Node) (string, error) {
-				return gw.RunSpecTask(dCtx, node.Task, func(iter int, action, obs string) {
+				return gw.RunSpecTask(dCtx, node.Task, func(iter int, action, _, obs string) {
 					fmt.Printf("  [%d] %s: %s\n", iter, action, truncate(obs, 80))
 				})
 			}

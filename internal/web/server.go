@@ -2,17 +2,23 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/user/golovebox/internal/config"
 	"github.com/user/golovebox/internal/dag"
 	"github.com/user/golovebox/internal/dsl"
@@ -20,6 +26,7 @@ import (
 	"github.com/user/golovebox/internal/llm"
 	"github.com/user/golovebox/internal/orchestrator"
 	"github.com/user/golovebox/internal/skills"
+	"github.com/user/golovebox/internal/tools"
 )
 
 //go:embed static
@@ -66,19 +73,38 @@ func New(gw *gateway.Gateway, orch *orchestrator.Orchestrator, cm *dag.Checkpoin
 // Start registers all routes and begins serving on addr.
 // Blocks until ctx is cancelled.
 func (s *Server) Start(ctx context.Context, addr string) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", s.handleIndex)
-	mux.HandleFunc("GET /api/status", s.handleStatus)
-	mux.HandleFunc("POST /api/run", s.handleRun)
-	mux.HandleFunc("GET /api/runs", s.handleListRuns)
-	mux.HandleFunc("GET /api/runs/{id}", s.handleGetRun)
-	mux.HandleFunc("GET /api/runs/{id}/stream", s.handleStream)
-	mux.HandleFunc("POST /api/runs/{id}/approve/{nodeID}", s.handleApprove)
-	mux.HandleFunc("POST /api/runs/{id}/reject/{nodeID}", s.handleReject)
-	mux.HandleFunc("GET /api/skills", s.handleListSkills)
-	mux.HandleFunc("POST /api/skills/generate", s.handleGenerateSkill)
+	r := chi.NewRouter()
+	r.Use(middleware.Recoverer)
 
-	srv := &http.Server{Addr: addr, Handler: mux}
+	r.Get("/", s.handleIndex)
+
+	r.Route("/api", func(r chi.Router) {
+		r.Get("/status", s.handleStatus)
+		r.Get("/health", s.handleHealth)
+		r.Post("/run", s.handleRun)
+		r.Get("/runs", s.handleListRuns)
+
+		r.Route("/runs/{id}", func(r chi.Router) {
+			r.Get("/", s.handleGetRun)
+			r.Get("/stream", s.handleStream)
+			r.Post("/stop", s.handleStop)
+			r.Post("/approve/{nodeID}", s.handleApprove)
+			r.Post("/reject/{nodeID}", s.handleReject)
+			r.Get("/nodes/{nodeID}/log", s.handleNodeLog)
+		})
+
+		r.Route("/skills", func(r chi.Router) {
+			r.Get("/", s.handleListSkills)
+			r.Post("/generate", s.handleGenerateSkill)
+		})
+
+		r.Get("/vm/files", s.handleVMFiles)
+		r.Get("/vm/file",  s.handleVMFile)
+	})
+
+	r.Get("/ws/terminal", s.handleTerminal)
+
+	srv := &http.Server{Addr: addr, Handler: r}
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -116,6 +142,19 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
+	// Accept JSON body: {"task": "..."}
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var body struct {
+			Task string `json:"task"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Task == "" {
+			http.Error(w, "task required", http.StatusBadRequest)
+			return
+		}
+		s.startRunFromTask(w, r.Context(), body.Task)
+		return
+	}
+
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, "bad multipart: "+err.Error(), http.StatusBadRequest)
 		return
@@ -143,12 +182,72 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.launchRun(w, r.Context(), runID, specFiles)
+}
+
+func (s *Server) startRunFromTask(w http.ResponseWriter, ctx context.Context, task string) {
+	runID, err := s.store.NewRun()
+	if err != nil {
+		http.Error(w, "create run: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Persist the task text for display purposes.
+	_ = os.WriteFile(filepath.Join(s.store.RunDir(runID), "task.txt"), []byte(task), 0o644)
+
+	// Wrap free-form task as a minimal spec file so the orchestrator can plan it.
+	content := "# Task\n\n" + task + "\n"
+	_ = s.store.SaveSpec(runID, "task.md", []byte(content))
+
+	specFiles, err := dsl.ParseDir(s.store.SpecsDir(runID))
+	if err != nil || len(specFiles) == 0 {
+		// Fallback: treat raw text as single-node task directly.
+		s.launchSingleTask(w, ctx, runID, task)
+		return
+	}
+	s.launchRun(w, ctx, runID, specFiles)
+}
+
+func (s *Server) launchSingleTask(w http.ResponseWriter, ctx context.Context, runID, task string) {
 	runDir := s.store.RunDir(runID)
-	d, err := s.orch.Plan(r.Context(), runID, specFiles, runDir)
+	nodeID := "task-0"
+	nodelog := s.store.NodeLogFor(runID, nodeID)
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.store.RegisterRun(runID, cancel)
+
+	s.mu.Lock()
+	s.activeRuns[runID] = nil
+	s.mu.Unlock()
+
+	go func() {
+		defer func() {
+			cancel()
+			s.store.UnregisterRun(runID)
+			s.mu.Lock()
+			delete(s.activeRuns, runID)
+			s.mu.Unlock()
+		}()
+		_, _ = s.gw.RunSpecTask(runCtx, task, func(iter int, action, params, obs string) {
+			nodelog.Append(iter, action, params, obs)
+			s.broadcastNodeLog(runID, nodeID, NodeLogEntry{iter, action, params, obs, time.Now()})
+			_ = appendFile(filepath.Join(runDir, "logs", nodeID+".log"),
+				fmt.Sprintf("[%d] %s: %s\n", iter, action, obs))
+		})
+	}()
+
+	writeJSON(w, map[string]string{"run_id": runID})
+}
+
+func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID string, specFiles []*dsl.ParsedSpec) {
+	runDir := s.store.RunDir(runID)
+	d, err := s.orch.Plan(ctx, runID, specFiles, runDir)
 	if err != nil {
 		http.Error(w, "plan: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.store.RegisterRun(runID, cancel)
 
 	s.mu.Lock()
 	s.activeRuns[runID] = d
@@ -160,18 +259,89 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dispatch := func(dCtx context.Context, node *dag.Node) (string, error) {
+		// Workflow node types are dispatched directly, not through the agent loop.
+		switch node.Type {
+		case dag.TypeSyncRepo:
+			client, err := s.gw.AcquireSSH(dCtx)
+			if err != nil {
+				return "", err
+			}
+			defer s.gw.ReleaseSSH(client)
+			return tools.SyncRepo(dCtx, client,
+				s.cfg.GitHubToken,
+				s.cfg.Workflow.DefaultRepo,
+				s.cfg.Workflow.ClonePath,
+				s.cfg.Workflow.DefaultBranch,
+			)
+
+		case dag.TypeBranch:
+			client, err := s.gw.AcquireSSH(dCtx)
+			if err != nil {
+				return "", err
+			}
+			defer s.gw.ReleaseSSH(client)
+			branchName := node.Annotation
+			if branchName == "" {
+				branchName = node.Task
+			}
+			out, err := tools.ExecBranch(client, s.cfg.Workflow.ClonePath, branchName)
+			if err == nil {
+				s.store.SetRunMeta(runID, "current_branch", branchName)
+			}
+			return out, err
+
+		case dag.TypePush:
+			client, err := s.gw.AcquireSSH(dCtx)
+			if err != nil {
+				return "", err
+			}
+			defer s.gw.ReleaseSSH(client)
+			branch := s.store.GetRunMeta(runID, "current_branch")
+			return tools.ExecPush(client, s.cfg.GitHubToken, s.cfg.Workflow.ClonePath, branch)
+
+		case dag.TypePR:
+			parts := strings.SplitN(s.cfg.Workflow.DefaultRepo, "/", 2)
+			if len(parts) != 2 {
+				return "", fmt.Errorf("workflow.default_repo not set or invalid")
+			}
+			owner, repo := parts[0], parts[1]
+			branch := s.store.GetRunMeta(runID, "current_branch")
+			titleParam := node.Annotation
+			if titleParam == "" {
+				task := s.store.ReadTask(runID)
+				if len(task) > 60 {
+					task = task[:60] + "..."
+				}
+				titleParam = "feat: " + task
+			}
+			body := fmt.Sprintf("## O que foi feito\n\n%s\n\n---\n*Gerado pelo golovebox run `%s`*",
+				s.store.ReadTask(runID), runID)
+			return tools.ExecPR(dCtx, s.cfg.GitHubToken, owner, repo,
+				branch, s.cfg.Workflow.DefaultBranch, titleParam, body)
+		}
+
+		// Default: run through the agent loop.
+		nodelog := s.store.NodeLogFor(runID, node.ID)
 		logPath := filepath.Join(runDir, "logs", node.ID+".log")
-		return s.gw.RunSpecTask(dCtx, node.Task, func(iter int, action, obs string) {
+		return s.gw.RunSpecTask(dCtx, node.Task, func(iter int, action, params, obs string) {
+			nodelog.Append(iter, action, params, obs)
+			s.broadcastNodeLog(runID, node.ID, NodeLogEntry{iter, action, params, obs, time.Now()})
 			_ = appendFile(logPath, fmt.Sprintf("[%d] %s: %s\n", iter, action, obs))
 		})
 	}
 
 	exec := dag.NewExecutor(d, dag.ExecutorConfig{}, dispatch, notify, s.checkpoint, runDir)
 	go func() {
-		_ = exec.Run(context.Background())
-		s.mu.Lock()
-		delete(s.activeRuns, runID)
-		s.mu.Unlock()
+		defer func() {
+			cancel()
+			s.store.UnregisterRun(runID)
+			s.mu.Lock()
+			delete(s.activeRuns, runID)
+			s.mu.Unlock()
+		}()
+		if err := exec.Run(runCtx); err != nil {
+			slog.Warn("run finished with error", "run_id", runID, "error", err)
+		}
 	}()
 
 	writeJSON(w, map[string]string{"run_id": runID})
@@ -186,7 +356,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
-	runID := r.PathValue("id")
+	runID := chi.URLParam(r, "id")
 	d, err := s.store.LoadDAG(runID)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -201,11 +371,12 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"dag":         json.RawMessage(dagJSON),
 		"node_states": nodeStates,
+		"task":        s.store.ReadTask(runID),
 	})
 }
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
-	runID := r.PathValue("id")
+	runID := chi.URLParam(r, "id")
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -245,13 +416,19 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "id")
+	ok := s.store.CancelRun(runID)
+	writeJSON(w, map[string]bool{"ok": ok})
+}
+
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	s.checkpoint.Approve(r.PathValue("nodeID"))
+	s.checkpoint.Approve(chi.URLParam(r, "nodeID"))
 	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
-	nodeID := r.PathValue("nodeID")
+	nodeID := chi.URLParam(r, "nodeID")
 	var body struct {
 		Reason string `json:"reason"`
 	}
@@ -292,6 +469,140 @@ func (s *Server) handleGenerateSkill(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, sk)
 }
 
+// ── New handlers ──────────────────────────────────────────────────────────────
+
+type healthResult struct {
+	OK  bool   `json:"ok"`
+	Msg string `json:"msg"`
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	type result struct {
+		key string
+		res healthResult
+	}
+	ch := make(chan result, 4)
+
+	checks := []struct {
+		key string
+		fn  func(context.Context) healthResult
+	}{
+		{"vm", s.healthVM},
+		{"llm", s.healthLLM},
+		{"github", s.healthGitHub},
+		{"repo", s.healthRepo},
+	}
+
+	for _, c := range checks {
+		go func(key string, fn func(context.Context) healthResult) {
+			ch <- result{key, fn(ctx)}
+		}(c.key, c.fn)
+	}
+
+	out := make(map[string]healthResult, 4)
+	for range checks {
+		r := <-ch
+		out[r.key] = r.res
+	}
+	writeJSON(w, out)
+}
+
+// healthHTTP is a shared HTTP client for health checks — 4s timeout, respects context.
+var healthHTTP = &http.Client{Timeout: 4 * time.Second}
+
+func (s *Server) healthVM(ctx context.Context) healthResult {
+	out, err := s.gw.HealthCheckVM(ctx)
+	if err != nil {
+		return healthResult{false, err.Error()}
+	}
+	return healthResult{true, out}
+}
+
+func (s *Server) healthLLM(ctx context.Context) healthResult {
+	if s.cfg.LLMBaseURL == "" {
+		return healthResult{false, "LLMBaseURL não configurado"}
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"model":      s.cfg.LLMModel,
+		"max_tokens": 1,
+		"messages":   []map[string]string{{"role": "user", "content": "ping"}},
+	})
+	req, err := http.NewRequestWithContext(ctx, "POST", s.cfg.LLMBaseURL+"/v1/messages", bytes.NewReader(payload))
+	if err != nil {
+		return healthResult{false, err.Error()}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", s.cfg.APIKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	t0 := time.Now()
+	resp, err := healthHTTP.Do(req)
+	if err != nil {
+		return healthResult{false, err.Error()}
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		return healthResult{false, fmt.Sprintf("HTTP %d", resp.StatusCode)}
+	}
+	return healthResult{true, fmt.Sprintf("%s respondeu em %dms", s.cfg.LLMModel, time.Since(t0).Milliseconds())}
+}
+
+func (s *Server) healthGitHub(ctx context.Context) healthResult {
+	if s.cfg.GitHubToken == "" {
+		return healthResult{false, "GitHubToken não configurado"}
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/user", nil)
+	if err != nil {
+		return healthResult{false, err.Error()}
+	}
+	req.Header.Set("Authorization", "Bearer "+s.cfg.GitHubToken)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := healthHTTP.Do(req)
+	if err != nil {
+		return healthResult{false, err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return healthResult{false, fmt.Sprintf("HTTP %d", resp.StatusCode)}
+	}
+	var u struct {
+		Login string `json:"login"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&u)
+	return healthResult{true, "autenticado como " + u.Login}
+}
+
+func (s *Server) healthRepo(ctx context.Context) healthResult {
+	if s.cfg.DefaultRepo == "" {
+		return healthResult{true, "DefaultRepo não configurado (ok)"}
+	}
+	url := "https://api.github.com/repos/" + s.cfg.DefaultRepo
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return healthResult{false, err.Error()}
+	}
+	req.Header.Set("Authorization", "Bearer "+s.cfg.GitHubToken)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := healthHTTP.Do(req)
+	if err != nil {
+		return healthResult{false, err.Error()}
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return healthResult{false, fmt.Sprintf("%s: HTTP %d", s.cfg.DefaultRepo, resp.StatusCode)}
+	}
+	return healthResult{true, s.cfg.DefaultRepo + ": acessível"}
+}
+
+func (s *Server) handleNodeLog(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "id")
+	nodeID := chi.URLParam(r, "nodeID")
+	entries := s.store.GetNodeLog(runID, nodeID)
+	writeJSON(w, entries)
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 func (s *Server) broadcast(runID, msg string) {
@@ -304,6 +615,20 @@ func (s *Server) broadcast(runID, msg string) {
 		default:
 		}
 	}
+}
+
+// broadcastNodeLog emits a node_log SSE event for a single ReAct iteration.
+func (s *Server) broadcastNodeLog(runID, nodeID string, entry NodeLogEntry) {
+	data, _ := json.Marshal(map[string]any{
+		"type":    "node_log",
+		"node_id": nodeID,
+		"iter":    entry.Iteration,
+		"action":  entry.Action,
+		"params":  entry.Params,
+		"obs":     entry.Observation,
+		"ts":      entry.Timestamp,
+	})
+	s.broadcast(runID, string(data))
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

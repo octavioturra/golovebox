@@ -4,10 +4,12 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"os"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/user/golovebox/internal/agent"
 	"github.com/user/golovebox/internal/config"
@@ -62,7 +64,7 @@ func (g *Gateway) Run(ctx context.Context) error {
 		go func(h Handler) {
 			defer wg.Done()
 			if err := h.Start(ctx); err != nil && ctx.Err() == nil {
-				fmt.Fprintf(os.Stderr, "gateway: handler error: %v\n", err)
+				slog.Error("gateway handler error", "error", err)
 			}
 		}(h)
 	}
@@ -129,6 +131,32 @@ func (g *Gateway) RunTask(ctx context.Context, owner, repo string, issueNum int,
 
 	loop := agent.New(g.llm, registry, mem)
 	return loop.Run(ctx, task, progress)
+}
+
+// AcquireSSH acquires an SSH client from the pool for direct use.
+// The caller must call ReleaseSSH when done.
+func (g *Gateway) AcquireSSH(ctx context.Context) (*ssh.Client, error) {
+	return g.pool.Acquire(ctx)
+}
+
+// ReleaseSSH returns an SSH client to the pool.
+func (g *Gateway) ReleaseSSH(c *ssh.Client) {
+	g.pool.Release(c)
+}
+
+// HealthCheckVM acquires a sandbox connection, runs "echo ok", and returns the output.
+// Returns an error if the pool is empty, the connection fails, or the command errors.
+func (g *Gateway) HealthCheckVM(ctx context.Context) (string, error) {
+	sc, err := g.pool.Acquire(ctx)
+	if err != nil {
+		return "", fmt.Errorf("pool: %w", err)
+	}
+	defer g.pool.Release(sc)
+	out := tools.Shell(sc, "echo ok")
+	if !strings.Contains(out, "ok") {
+		return "", fmt.Errorf("unexpected output: %q", out)
+	}
+	return "SSH echo ok", nil
 }
 
 // RunSpecTask runs the agent loop for an arbitrary task string.

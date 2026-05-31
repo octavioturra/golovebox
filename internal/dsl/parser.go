@@ -127,6 +127,18 @@ func ParseDir(dir string) ([]*ParsedSpec, error) {
 	return specs, firstErr
 }
 
+// noArgKeywords matches keywords that stand alone on a line (no argument or no colon required).
+var noArgKeywords = map[KeywordType]bool{
+	KwPush: true,
+}
+
+// spaceArgKeywords matches keywords that take an argument after a space (no colon).
+var spaceArgKeywords = map[KeywordType]bool{
+	KwTry:       true,
+	KwNewBranch: true,
+	KwPR:        true,
+}
+
 // parseLine attempts to match a single trimmed line against all known keywords.
 func parseLine(lineNum int, raw, trimmed string) (Annotation, bool) {
 	// WHEN ... DO ... (single-line pattern)
@@ -135,22 +147,32 @@ func parseLine(lineNum int, raw, trimmed string) (Annotation, bool) {
 		if len(parts) == 2 {
 			whenArg := strings.TrimSpace(strings.TrimPrefix(parts[0], string(KwWhen)))
 			doArg := strings.TrimSpace(parts[1])
-			// Emit WHEN annotation; caller can pair with DO via same line number
 			return Annotation{Keyword: KwWhen, Argument: whenArg + " DO " + doArg, Line: lineNum, Raw: raw}, true
 		}
 	}
 
 	for _, kw := range allKeywords {
-		prefix := string(kw) + ":"
+		kwStr := string(kw)
+
+		// Exact match for no-arg keywords (e.g. PUSH alone on a line)
+		if noArgKeywords[kw] && trimmed == kwStr {
+			return Annotation{Keyword: kw, Argument: "", Line: lineNum, Raw: raw}, true
+		}
+
+		// "KEYWORD: arg" — colon form
+		prefix := kwStr + ":"
 		if strings.HasPrefix(trimmed, prefix) {
 			arg := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
 			return Annotation{Keyword: kw, Argument: arg, Line: lineNum, Raw: raw}, true
 		}
-		// Also match "KEYWORD " (without colon) for keywords that take inline args
-		prefix2 := string(kw) + " "
-		if kw == KwTry && strings.HasPrefix(trimmed, prefix2) {
-			arg := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix2))
-			return Annotation{Keyword: kw, Argument: arg, Line: lineNum, Raw: raw}, true
+
+		// "KEYWORD arg" — space form (no colon)
+		if spaceArgKeywords[kw] {
+			prefix2 := kwStr + " "
+			if strings.HasPrefix(trimmed, prefix2) {
+				arg := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix2))
+				return Annotation{Keyword: kw, Argument: arg, Line: lineNum, Raw: raw}, true
+			}
 		}
 	}
 	return Annotation{}, false

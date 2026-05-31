@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/user/golovebox/internal/config"
 	"github.com/user/golovebox/internal/dag"
 	"github.com/user/golovebox/internal/dsl"
 	"github.com/user/golovebox/internal/llm"
@@ -19,11 +20,12 @@ import (
 type Orchestrator struct {
 	llm    *llm.Client
 	memory *memory.Memory
+	cfg    *config.Config
 }
 
 // New creates an Orchestrator.
-func New(llmClient *llm.Client, mem *memory.Memory) *Orchestrator {
-	return &Orchestrator{llm: llmClient, memory: mem}
+func New(llmClient *llm.Client, mem *memory.Memory, cfg *config.Config) *Orchestrator {
+	return &Orchestrator{llm: llmClient, memory: mem, cfg: cfg}
 }
 
 // nodeDescriptor is the JSON schema the LLM is asked to produce.
@@ -58,7 +60,24 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 		_ = os.WriteFile(filepath.Join(artifactsDir, "tech_debt.md"), []byte(sb.String()), 0o644)
 	}
 
-	prompt := buildPlanningPrompt(specs)
+	var repoCtx string
+	if o.cfg != nil && o.cfg.DefaultRepo != "" {
+		repoCtx = fmt.Sprintf(
+			"- DefaultRepo: %s\n- GitHubToken disponível: %v\n- Repositório pode já estar em /root/%s na VM\n",
+			o.cfg.DefaultRepo,
+			o.cfg.GitHubToken != "",
+			repoPathFromRepo(o.cfg.DefaultRepo),
+		)
+	} else if o.cfg != nil && o.cfg.Workflow.DefaultRepo != "" {
+		repoCtx = fmt.Sprintf(
+			"- DefaultRepo: %s\n- GitHubToken disponível: %v\n- Repositório pode já estar em %s na VM\n",
+			o.cfg.Workflow.DefaultRepo,
+			o.cfg.GitHubToken != "",
+			o.cfg.Workflow.ClonePath,
+		)
+	}
+
+	prompt := buildPlanningPrompt(specs, o.cfg, repoCtx)
 	reply, err := o.llm.Complete(ctx, []llm.Message{
 		{Role: "user", Content: prompt},
 	})
@@ -72,6 +91,20 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 	}
 
 	d := dag.New(runID)
+
+	// Inject sync_repo as the first node when a default repo is configured.
+	if o.cfg != nil && o.cfg.Workflow.DefaultRepo != "" {
+		syncNode := &dag.Node{
+			ID:   "sync_repo",
+			Type: dag.TypeSyncRepo,
+			Task: fmt.Sprintf("Sincronizar %s em %s", o.cfg.Workflow.DefaultRepo, o.cfg.Workflow.ClonePath),
+		}
+		if err := d.AddNode(syncNode); err != nil {
+			return nil, fmt.Errorf("orchestrator: add sync_repo: %w", err)
+		}
+		// All LLM nodes will depend on sync_repo — added below.
+	}
+
 	for _, nd := range nodes {
 		nodeType := dag.NodeType(nd.Type)
 		if !validNodeType(nodeType) {
@@ -84,11 +117,25 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 			Dependencies: nd.Dependencies,
 			Annotation:   nd.Annotation,
 		}
+		// If sync_repo is injected, all root nodes (no dependencies) must wait for it.
+		if o.cfg != nil && o.cfg.Workflow.DefaultRepo != "" && nd.ID != "sync_repo" {
+			if len(nd.Dependencies) == 0 {
+				n.Dependencies = []string{"sync_repo"}
+			}
+		}
 		if err := d.AddNode(n); err != nil {
 			return nil, fmt.Errorf("orchestrator: add node %q: %w", nd.ID, err)
 		}
 	}
 	for _, nd := range nodes {
+		// Add sync_repo edge for root nodes.
+		if o.cfg != nil && o.cfg.Workflow.DefaultRepo != "" && nd.ID != "sync_repo" {
+			if len(nd.Dependencies) == 0 {
+				if err := d.AddEdge("sync_repo", nd.ID); err != nil {
+					return nil, fmt.Errorf("orchestrator: sync_repo edge to %s: %w", nd.ID, err)
+				}
+			}
+		}
 		for _, dep := range nd.Dependencies {
 			if err := d.AddEdge(dep, nd.ID); err != nil {
 				return nil, fmt.Errorf("orchestrator: add edge %s→%s: %w", dep, nd.ID, err)
@@ -99,7 +146,7 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 	return d, nil
 }
 
-func buildPlanningPrompt(specs []*dsl.ParsedSpec) string {
+func buildPlanningPrompt(specs []*dsl.ParsedSpec, cfg *config.Config, repoCtx string) string {
 	var sb strings.Builder
 	sb.WriteString(`You are an execution planner. Read the specs below and produce a JSON execution plan.
 
@@ -109,14 +156,36 @@ Rules:
 - NOTIFY_ME annotations → node type "notify"
 - WHEN/DO annotations → node type "wait_event"
 - TRY/OR_ELSE annotations → node type "try_else"
+- NEW BRANCH <name> annotations → node type "branch", annotation field = branch name
+- PUSH annotations → node type "push"
+- PR ["title"] annotations → node type "pr", annotation field = PR title (may be empty)
 - NOT_TODO items must NOT appear as nodes
 - Nodes that are independent of each other must NOT have dependencies between them (they run in parallel)
 - Each node needs a clear, actionable "task" string describing exactly what the agent should do
+- Each node "id" MUST be snake_case and describe the action performed (e.g. "create_auth_handler", "run_unit_tests", "open_pull_request"). NEVER use generic names like "step-1", "step-2", "task-1", "node-1".
+- Tasks involving git MUST include: clone the repo (if not already present), configure remote with token via GIT_ASKPASS, create branch, commit changes, push and open PR
+- Use DefaultRepo from execution context when available
+- The GitHub token is available via GIT_ASKPASS — the agent shell tool already handles authentication
 
 Return ONLY a JSON array, no markdown fences, no explanation:
-[{"id":"string","type":"task|checkpoint|gate|notify|wait_event|try_else","task":"string","dependencies":["id",...],"annotation":"string (optional)"}]
+[{"id":"string","type":"task|checkpoint|gate|notify|wait_event|try_else|branch|push|pr","task":"string","dependencies":["id",...],"annotation":"string (optional)"}]
 
 `)
+
+	if repoCtx != "" {
+		sb.WriteString("## Execution Context\n\n")
+		sb.WriteString(repoCtx)
+		sb.WriteString("\n\n")
+	}
+
+	if cfg != nil && cfg.Workflow.RunMode == "build_only" {
+		sb.WriteString(`RESTRIÇÃO run_mode=build_only:
+Não inclua nenhum node que execute servidores, processos em background, ou comandos que mantenham
+processo rodando (npm run dev, go run, python app.py, docker run, etc.).
+Se o spec pedir para "servir" ou "rodar" a aplicação, trate como NOT_TODO.
+
+`)
+	}
 
 	for _, s := range specs {
 		sb.WriteString(fmt.Sprintf("## Spec: %s\n\n", s.FilePath))
@@ -155,9 +224,18 @@ func parseNodeDescriptors(reply string) ([]nodeDescriptor, error) {
 	return nodes, nil
 }
 
+func repoPathFromRepo(ownerRepo string) string {
+	parts := strings.SplitN(ownerRepo, "/", 2)
+	if len(parts) == 2 {
+		return parts[1]
+	}
+	return ownerRepo
+}
+
 func validNodeType(t dag.NodeType) bool {
 	switch t {
-	case dag.TypeTask, dag.TypeCheckpoint, dag.TypeGate, dag.TypeNotify, dag.TypeWaitEvent, dag.TypeTryElse:
+	case dag.TypeTask, dag.TypeCheckpoint, dag.TypeGate, dag.TypeNotify, dag.TypeWaitEvent, dag.TypeTryElse,
+		dag.TypeSyncRepo, dag.TypeBranch, dag.TypePush, dag.TypePR:
 		return true
 	}
 	return false
