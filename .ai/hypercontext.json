@@ -1,363 +1,190 @@
 {
   "project": "golovebox",
-  "tagline": "Portable, self-hosted, VM-sandboxed, intention-DSL agentic workflow platform.",
-  "status": "phase-7 complete — Alpine NoCloud boot + silent QEMU + reset cmd. golovebox.exe ~450MB.",
-
-  "vision_one_line": "Devin + n8n + Temporal, em um binário, self-hosted, orientado a intenção natural.",
+  "tagline": "Devin + n8n + Temporal, em um binário. Self-hosted, intention-DSL agentic workflow platform.",
+  "vision": "Portable autonomous coding agent that learns from every execution, builds reusable knowledge, and becomes progressively more efficient on the same project — all from a single .exe, zero install, data stays local.",
 
   "philosophy": {
-    "portable_app": true,
-    "base_dir": "filepath.Join(filepath.Dir(os.Executable()), \".golovebox\")",
-    "no_writes_outside_base_dir": true,
-    "no_admin_required": true,
-    "no_cgo": true,
-    "build_command": "mage build — nunca go build direto",
-    "self_hosted": true,
-    "zero_cloud_dependency": true,
-    "single_binary": true,
-    "offline_capable_after_build": true,
-    "zero_cognitive_effort": "init funciona sem nenhum passo manual; config wizard reusa valores existentes via [bracketed defaults]"
+    "portable_app": "tudo relativo ao executável, sem exceções",
+    "no_cgo": "zero CGO, portabilidade total, sem MinGW no Windows",
+    "self_hosted": "dados locais, sem telemetria, sem lock-in de cloud",
+    "zero_cognitive_effort": "init funciona sem nenhum passo manual",
+    "offline_capable": "após o build, zero internet necessária",
+    "md_first_memory": "memória persistida como Markdown antes de vetorizar — portável, legível, transportável entre projetos"
   },
 
-  "platform": {
-    "primary": "Windows x86_64",
-    "v1_targets": ["Linux x86_64", "macOS arm64"]
+  "v0_definition_of_done": "Copy golovebox.exe to any Windows folder, run golovebox init, open localhost:8080, type a task, watch the DAG execute in the Alpine VM, see the ReAct log in real time, receive the result — without installing anything.",
+
+  "v1_definition_of_done": "O agente aprende com cada execução, recupera conhecimento de tasks anteriores, delega para especialistas, documenta o que fez em TASK_ID.md, e fica progressivamente mais eficiente no mesmo projeto — tudo self-hosted, dados locais, zero lock-in.",
+
+  "v0_status": {
+    "completed": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    "in_spec": [10, 11],
+    "phase_10": "UI Refactor — Alpine.js substituindo JS imperativo; comportamento idêntico",
+    "phase_11": "Refactor — Canvas2D→Cytoscape, net/http→chi, fmt→slog, marked.js, highlight.js"
   },
 
-  "binary_composition": {
-    "description": "Binário embute QEMU + Alpine NoCloud cloud qcow2 (pronto para boot) via go:embed. Init extrai, cloud-init configura SSH no primeiro boot.",
-    "embed_strategy": "build tags por OS selecionam QEMU asset dir (windows/linux/darwin); imagem Alpine é compartilhada entre OSes",
-    "assets": {
-      "qemu_windows": "~80MB — extraído do installer oficial weilnetz.de via NSIS silent install",
-      "qemu_linux": "copiado do sistema (apt install qemu-system-x86)",
-      "qemu_darwin": "copiado do Homebrew (brew install qemu)",
-      "alpine_cloud_qcow2": "~164MB — nocloud_alpine-3.21.7-x86_64-bios-cloudinit-r0.qcow2 (Alpine instalado + cloud-init habilitado)"
+  "v1_roadmap": {
+    "v1_fase1": {
+      "name": "Workflow Protocol",
+      "goal": "Padronizar o fluxo de trabalho do agente",
+      "features": [
+        "branch-per-task: toda task cria branch, abre PR ao final",
+        "TASK_ID.md gerado ao final de cada execução com observações, decisões e débitos",
+        "lifecycle hooks: global_prompt, pre_step, post_step, pre_code, post_code",
+        "hierarchy de contexto: global → hypercontext → version → phase → task",
+        "workflow.toml: configuração do protocolo por projeto"
+      ],
+      "analogy": "o que fazemos manualmente com FASE_N.md e hypercontext.json, o agente faz automaticamente"
     },
-    "total_binary_size": "~450MB (Windows)",
-    "sources": {
-      "qemu_windows": "https://qemu.weilnetz.de/w64/ — último qemu-w64-setup-YYYYMMDD.exe (SHA512 verificado)",
-      "alpine_cloud_qcow2": "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.7-x86_64-bios-cloudinit-r0.qcow2"
+    "v1_fase2": {
+      "name": "Memory Architecture",
+      "goal": "Hierarquia de memória MD-first, portável entre projetos",
+      "memory_layers": {
+        "L1_working": "contexto da sessão atual, in-flight, context window",
+        "L2_episodic": "TASK_ID.md — o que aconteceu, o que funcionou, o que falhou",
+        "L3_semantic": "vetores chromem-go derivados dos MD (fonte de verdade é o MD)",
+        "L4_hypercontext": "projeto inteiro — stack, decisões, filosofia, sempre injetado"
+      },
+      "portability": "cp -r .golovebox/memory/ /outro-projeto/ — chromem-go reconstrói vetores do MD",
+      "context_hierarchy": {
+        "global": ".golovebox/prompts/global.md — injetado em todo LLM call",
+        "hypercontext": ".golovebox/hypercontext.json — projeto inteiro",
+        "version": ".golovebox/context/vN.md — contexto da versão atual",
+        "phase": "FASE_N.md — fase em andamento",
+        "task": "TASK_ID.md — gerado ao final de cada execução"
+      }
     },
-    "previous_approach_abandoned": {
-      "phase_5_msys2": "MSYS2 .pkg.tar.zst — sem DLLs transitivas, layout mingw64/* confuso, requer tar com --zstd",
-      "phase_5_alpine_iso": "Alpine Virt ISO — é instalador interativo, cloud-init não está no boot path, sempre travava em localhost login:",
-      "fix_phase_6": "QEMU via weilnetz.de NSIS installer (todas DLLs + firmware + flat layout)",
-      "fix_phase_7": "Alpine via NoCloud cloud qcow2 (já instalado, cloud-init habilitado em runlevels OpenRC)"
+    "v1_fase3": {
+      "name": "Learning Loop",
+      "goal": "Agente aprende e melhora com cada execução",
+      "flow": [
+        "executar task",
+        "reflection step: LLM avalia o que funcionou, o que falhou, por quê",
+        "abstração: esse padrão aparece 2+ vezes? propor skill",
+        "skill criada → TOML frontmatter + prompt body → vetorizada",
+        "próxima task similar → skill recuperada e injetada no prompt"
+      ],
+      "trigger": "mesmo pattern de tools usado 2+ vezes numa sessão → propõe skill ao usuário",
+      "storage": ".golovebox/memory/episodic/TASK_ID.md + .golovebox/skills/ (aprendidas automaticamente)"
+    },
+    "v1_fase4": {
+      "name": "Multi-agent",
+      "goal": "Principal + especialistas, não swarm",
+      "architecture": {
+        "orchestrator": "lê hypercontext, planeja, delega, agrega — não executa código",
+        "code_agent": "escreve código, entende padrões do repo, memória isolada por domínio",
+        "test_agent": "escreve e roda testes, interpreta cobertura, sugere melhorias",
+        "git_agent": "branch, commit, PR, rebase — especializado em operações Git",
+        "review_agent": "lê código, aponta problemas, sugere refactor — sem executar"
+      },
+      "communication": "mensagem + contexto compartilhado via L4_hypercontext — sem estado compartilhado",
+      "why_not_swarm": "hierarquia clara, principal controla, especialistas executam — previsível e debugável"
     }
   },
 
-  "build_system": {
-    "tool": "Mage (github.com/magefile/mage) — build system em Go puro",
-    "targets": {
-      "mage fetch": "baixa QEMU + Alpine cloud qcow2 para o OS atual",
-      "mage fetchAlpine": "só Alpine cloud qcow2",
-      "mage fetchWindows": "QEMU Windows via silent NSIS install (no admin, no UAC)",
-      "mage fetchLinux": "copia QEMU do sistema",
-      "mage fetchDarwin": "copia QEMU do Homebrew prefix",
-      "mage build": "go build para OS atual",
-      "mage buildWindows": "cross-compile para Windows amd64",
-      "mage check": "verifica assets presentes e tamanhos corretos",
-      "mage clean": "remove assets baixados e build/ scratch"
+  "core_architecture": {
+    "sandbox": {
+      "technology": "QEMU Alpine Linux",
+      "why": "único sandbox cross-platform real — Linux/Mac/Windows",
+      "host_vm_exec": "SSH localhost:2222",
+      "host_vm_files": "SFTP",
+      "host_vm_control": "QMP TCP localhost:4444",
+      "vm_image": "Alpine NoCloud cloud qcow2 — boot direto, sem install step",
+      "silent_boot": "stdout→vm/qemu.log, stdin→os.DevNull — terminal do host intocado"
     },
-    "dev_setup": "go install github.com/magefile/mage@latest && mage fetch && mage build",
-    "assets_in_git": false,
-    "gitignore": ["internal/embed/assets/", "build/", "*.qcow2", "*.exe"]
-  },
-
-  "vm_setup": {
-    "approach": "Alpine NoCloud cloud qcow2 (já instalado) + CIDATA seed — boot direto, sem install step",
-    "flow": [
-      "extrair QEMU embutido → .golovebox/qemu/",
-      "extrair Alpine cloud qcow2 → .golovebox/vm/base.img (idempotência via marker .alpine-image-size)",
-      "gerar keypair SSH RSA 4096 → .golovebox/vm/id_rsa + .pub",
-      "gerar CIDATA ISO9660 com user-data (key + sshd drop-in PermitRootLogin)",
-      "boot QEMU: base.img (virtio-blk-pci bootindex=0) + cidata.iso (virtio-blk-pci sem bootindex)",
-      "cloud-init no first boot (~1m42s no Windows TCG): aplica key, /etc/ssh/sshd_config.d/99-golovebox.conf, rc-service sshd restart",
-      "host polla SSH em localhost:2222 por até 5 min até echo ok"
-    ],
-    "cloud_init_lib": "github.com/kdomanski/iso9660 — pure Go, zero CGO",
-    "qemu_silent_boot": "cmd.Stdout/Stderr → vm/qemu.log; cmd.Stdin = os.DevNull. Terminal do host nunca é invadido.",
-    "boot_device_config": "-drive if=none,id=disk0 + -device virtio-blk-pci,drive=disk0,bootindex=0 + -boot order=c,menu=off",
-    "qcow2_magic_check": "sandbox.Start() lê 4 bytes de base.img; aborta com erro claro se magic != QFI\\xfb (em vez do críptico 'could not read boot disk' do SeaBIOS)",
-    "qmp_retry": "QMP TCP polling a cada 500ms até StartTimeout (default 15s, ajustável via --timeout no web)",
-    "cloud_init_user_data_packages": ["git", "curl", "bash", "openssh", "python3", "make"],
-    "install_time": "~1m42s no first boot (Windows TCG); ~10s com KVM (Linux)",
-    "result": "VM pronta com SSH key autorizada, sshd rodando aceitando key auth para root"
-  },
-
-  "core_concepts": {
-    "intention_dsl": {
-      "description": "Linguagem natural com anotações semânticas. Prosa legível por humano, parseável por agente.",
-      "keywords": {
-        "ATTENTION_HERE": "pausa o grafo, aguarda revisão humana via web chat (orange node)",
-        "PAUSE_TO_REVIEW": "alias para ATTENTION_HERE",
-        "NOTIFY_ME": "envia notificação e continua",
-        "NOT_TODO": "registra em tech_debt.md, exclui do DAG",
-        "RUN_TEST": "gate — DAG só avança se testes passarem",
-        "TRY ... OR_ELSE ...": "tenta A; se falhar, executa B",
-        "WHEN ... DO ...": "trigger condicional — espera evento externo"
-      },
-      "format": "prosa livre com keywords em MAIÚSCULAS opcionais",
-      "parser": "internal/dsl/"
+    "agent_loop": {
+      "pattern": "ReAct — Thought/Action/Parameters/Observation em texto puro",
+      "why_text_not_tool_use": "portável entre todos os LLM providers sem depender de features específicas",
+      "max_iterations": 20,
+      "progress_visibility": "ProgressFunc(iter, action, params, obs) → NodeLog .jsonl → SSE → web UI"
     },
     "dag_execution": {
       "node_types": ["task", "checkpoint", "gate", "notify", "try_else", "wait_event"],
-      "persistence": ".golovebox/runs/<run-id>/dag.json + node_states.json — retomável via golovebox resume",
-      "parallelism": "max 3 nodes simultâneos (configurável em ExecutorConfig)"
+      "parallelism": "max 3 nodes simultâneos",
+      "persistence": "dag.json + node_states.json — resumable após crash",
+      "live_updates": "SSE stream /api/runs/{id}/stream — state_change + node_log events"
     },
-    "agents": {
-      "orchestrator": "specs DSL → DAG → dispatch sub-agentes → aggregate",
-      "skill_layers": {
-        "tool": "função Go pura — shell, file, http, github",
-        "skill": "tool(s) + prompt template + exemplos",
-        "agent": "skill especializado com identidade e memória isolada"
-      }
-    },
-    "skill_system": {
-      "local_registry": ".golovebox/skills/ — markdown com frontmatter TOML",
-      "generate_command": "golovebox skill generate \"<descrição>\"",
-      "list_command": "golovebox skill list",
-      "auto_included": "orchestrator injeta lista de skills no contexto de planejamento",
-      "remote_registry": "ClaWHub — V2 (out of scope)"
-    },
-    "web_chat": {
-      "description": "Interface primária. HTTP server embutido, HTML+JS via embed.FS, sem Electron, sem build step.",
-      "two_panels": ["chat (upload specs + run history)", "DAG canvas (live node states)"],
-      "node_states": {
-        "pending": "cinza #9ca3af",
-        "running": "amarelo #fbbf24",
-        "done": "verde #34d399",
-        "error": "vermelho #f87171",
-        "waiting_human": "laranja #fb923c (click to review)"
-      },
-      "sse_updates": "/api/runs/{id}/stream — server-sent events",
-      "rest_api": [
-        "POST /api/run — upload specs, returns {run_id}",
-        "GET /api/runs — list all runs",
-        "GET /api/runs/{id} — dag.json + node_states",
-        "GET /api/runs/{id}/stream — SSE stream",
-        "POST /api/runs/{id}/approve/{nodeID}",
-        "POST /api/runs/{id}/reject/{nodeID}",
-        "GET /api/skills",
-        "POST /api/skills/generate"
-      ]
+    "web_ui": {
+      "primary_interface": true,
+      "stack": "Alpine.js + Cytoscape.js + chi + slog + marked + highlight — todos CDN ou stdlib",
+      "dag_visualization": "Cytoscape — live update via .data(), sem re-render do grafo",
+      "why_not_mermaid": "re-renderiza SVG inteiro; Cytoscape atualiza node individual via .data()",
+      "why_alpine_not_htmx": "backend retorna JSON, não HTML fragments; Alpine é natural para JSON + SSE",
+      "session_persistence": "localStorage — run ativo e node selecionado sobrevivem reload"
     }
   },
 
-  "stack": {
-    "cli": "spf13/cobra",
-    "config": "BurntSushi/toml",
-    "llm": "internal/llm — net/http wrapper, OpenAI-compatible + Anthropic Messages, retry exponencial (2s base, 30s cap, 3 attempts)",
-    "web_server": "net/http + embed.FS (sem framework)",
-    "build_system": "github.com/magefile/mage",
-    "cloud_init_iso": "github.com/kdomanski/iso9660 — pure Go, zero CGO",
-    "ssh_sftp": "golang.org/x/crypto/ssh + github.com/pkg/sftp",
-    "qemu_control": "internal/sandbox/qmp.go — cliente QMP TCP direto (sem dep go-qemu)",
-    "memory": "philippgille/chromem-go (pure Go, zero CGO)",
-    "github": "google/go-github/v60",
-    "telegram": "go-telegram-bot-api/telegram-bot-api/v5 — canal secundário",
-    "uuid": "github.com/google/uuid"
+  "key_decisions": {
+    "no_cgo": "sem MinGW no Windows, binário realmente portable",
+    "no_llm_sdk": "HTTP client próprio — zero provider lock-in, BaseURL swappable",
+    "no_virtio_fs": "suporte ruim em host Windows — SFTP via SSH já existente",
+    "no_prebuilt_vm": "Alpine NoCloud via cloud-init usa fonte oficial, sem imagem customizada",
+    "no_temporal": "infraestrutura pesada, vai contra filosofia portable",
+    "no_docker": "um dos pilares do produto — zero Docker, zero Python, zero Node no host",
+    "mage_not_make": "build system em Go puro, sem dependência de shell ou Makefile",
+    "weilnetz_installer": "único source confiável de QEMU Windows com todas as DLLs incluídas",
+    "md_first_memory": "MD é fonte de verdade, vetores são derivados — portabilidade e legibilidade garantidas",
+    "flat_qemu_layout": "weilnetz extrai estrutura flat — QEMUExePath consistente em todos os OSes"
   },
 
-  "stack_decisions": {
-    "why_not_goclaw": "application framework — packages all internal/, não importável",
-    "why_not_anthropic_sdk": "pesado, provider lock-in — wrapper HTTP próprio é trivial",
-    "why_not_sqlite_vec": "requer CGO",
-    "why_not_temporal": "infraestrutura pesada",
-    "why_not_n8n": "usuário não monta o grafo — agente monta a partir de specs DSL",
-    "why_not_alpine_virt_iso": "é instalador interativo; cloud-init não está no boot path; sempre trava em localhost login: (Phase 5/6 tentaram, nunca funcionou). Phase 7 trocou por cloud qcow2.",
-    "why_not_msys2_qemu": "não inclui DLLs transitivas; layout mingw64/* complexo. Phase 6 trocou por weilnetz.de NSIS.",
-    "why_not_go_qemu": "dependência grande para QMP — cliente TCP próprio em ~150 linhas é suficiente",
-    "why_not_go_rod": "browser tool era escopo V1 — não usado em prod",
-    "why_no_zip_qemu": "não existe zip oficial de QEMU para Windows — weilnetz.de NSIS installer é a fonte canonical (todas DLLs + firmware)",
-    "why_embed_everything": "zero esforço cognitivo: usuário não baixa nada, não configura nada",
-    "why_mage": "build system em Go puro, sem Makefile, sem shell script",
-    "llm_client": "POST /v1/messages (Anthropic) ou /v1/chat/completions (OpenAI-compat), anthropic-version condicional por URL, sem código condicional por provider"
+  "project_structure_overview": {
+    "cmd/golovebox/main.go": "CLI entrypoint — todos os cobra commands",
+    "magefile.go": "build pipeline — fetch, build, check, clean",
+    "internal/agent/": "ReAct loop, planner, tool registry, ProgressFunc",
+    "internal/config/": "portable paths relativos ao executável",
+    "internal/dag/": "DAG types, Executor paralelo, CheckpointManager",
+    "internal/dsl/": "spec keyword parser — ATTENTION_HERE, RUN_TEST, etc.",
+    "internal/embed/": "go:embed assets + extract/keygen/cloudinit",
+    "internal/gateway/": "Handler interface, Gateway router, TelegramHandler",
+    "internal/llm/": "HTTP client OpenAI-compat + retry exponential backoff",
+    "internal/memory/": "chromem-go wrapper — coleção isolada por agente",
+    "internal/orchestrator/": "specs → DAG via LLM (JSON plan com IDs snake_case descritivos)",
+    "internal/sandbox/": "qemu.go, qmp.go, ssh.go, pool.go",
+    "internal/setup/": "7-step init wizard — config primeiro, depois extract/boot",
+    "internal/skills/": "registry local + LLM generator",
+    "internal/tools/": "shell, files, github (GIT_ASKPASS com UUID)",
+    "internal/web/": "chi server, SSE broker, NodeLog, RunStore, embedded UI"
   },
-
-  "llm_providers": {
-    "anthropic": { "base_url": "https://api.anthropic.com",                 "model_example": "claude-opus-4-5",   "auth": "x-api-key + anthropic-version header" },
-    "openai":    { "base_url": "https://api.openai.com",                    "model_example": "gpt-4o",           "auth": "Bearer" },
-    "gemini":    { "base_url": "https://generativelanguage.googleapis.com", "model_example": "gemini-1.5-pro",   "auth": "OpenAI-compat endpoint" },
-    "ollama":    { "base_url": "http://localhost:11434",                    "model_example": "llama3",           "auth": "none (local)" }
-  },
-
-  "sandbox": {
-    "technology": "QEMU",
-    "qemu_source_windows": "weilnetz.de NSIS installer — silent install (/S /D=...) com __COMPAT_LAYER=RunAsInvoker para evitar UAC",
-    "qemu_source_linux": "copiado do sistema (apt install qemu-system-x86)",
-    "qemu_source_darwin": "copiado do Homebrew prefix (brew install qemu)",
-    "qemu_layout": "flat: qemu-system-x86_64.exe + qemu-img.exe + *.dll (~100) + share/qemu/ (firmware)",
-    "install_location": ".golovebox/qemu/",
-    "firmware_passthrough": "sandbox.Start() adiciona -L .golovebox/qemu/share/qemu quando esse dir existe",
-    "vm_image_source": "Alpine NoCloud cloud qcow2 — pronto para boot, cloud-init habilitado",
-    "vm_location": ".golovebox/vm/base.img",
-    "vm_idempotency": ".golovebox/vm/.alpine-image-size — marker com size do qcow2 embutido",
-    "host_vm_exec": "SSH localhost:2222 (hostfwd no -netdev user)",
-    "host_vm_files": "SFTP sobre mesma conexão SSH",
-    "host_vm_control": "QMP TCP localhost:4444 (server,nowait)",
-    "boot_device": "-drive if=none,id=disk0 + -device virtio-blk-pci,drive=disk0,bootindex=0 + -boot order=c,menu=off",
-    "cidata_device": "-drive if=none,id=cidata,readonly=on + -device virtio-blk-pci,drive=cidata (sem bootindex)",
-    "silent_boot": "stdout/stderr → vm/qemu.log; stdin → os.DevNull"
-  },
-
-  "agent_loop": {
-    "pattern": "Plan-and-Execute sobre ReAct",
-    "format": "Thought/Action/Parameters texto puro",
-    "max_iterations": 20,
-    "termination": "Action: done | Action: error | 20 iter timeout",
-    "tools_v0": [
-      "shell (SSH exec na VM)",
-      "read_file (SFTP)",
-      "write_file (SFTP)",
-      "search_memory (chromem-go similarity)",
-      "github_list_issues",
-      "github_get_issue",
-      "github_clone_repo (com GIT_ASKPASS para isolamento de token)",
-      "github_open_pr"
-    ]
-  },
-
-  "memory": {
-    "lib": "philippgille/chromem-go",
-    "persistence": ".golovebox/memory/",
-    "scope": "por agente — cada sub-agente tem coleção isolada"
-  },
-
-  "run_persistence": {
-    "location": ".golovebox/runs/<run-id>/",
-    "contents": ["dag.json", "node_states.json", "logs/", "artifacts/", "specs/", "run_summary.md"],
-    "resume_command": "golovebox resume <run-id>"
-  },
-
-  "commands": {
-    "init": "golovebox init [--repair] — config wizard (reusa config.toml com Y/n) + extract + boot + cloud-init",
-    "reset_soft": "golovebox reset [-y] — apaga vm/base.img + cidata + marker (mantém config + keys)",
-    "reset_hard": "golovebox reset --hard [-y] — apaga .golovebox/ inteiro (exige digitar 'yes' literal sem -y)",
-    "web": "golovebox web [--addr :8080] [--timeout N] — sobe VM, web UI, abre browser",
-    "run": "golovebox run <dir-or-file> — parse specs, plan DAG, execute com progresso no terminal",
-    "resume": "golovebox resume <run-id>",
-    "status": "golovebox status [run-id] — VM/config ou DAG de um run",
-    "exec": "golovebox exec \"<cmd>\" — shell direto na VM via SSH",
-    "github": "golovebox github --repo o/r --issue N — resolve issue (one-shot)",
-    "daemon": "golovebox daemon — Telegram bot gateway",
-    "skill": "golovebox skill list | generate \"<desc>\""
-  },
-
-  "init_steps_phase_7": [
-    "1. cria .golovebox/ ao lado do .exe",
-    "2. config wizard (reusa config.toml existente com defaults em [colchetes])",
-    "3. extrai QEMU embutido → .golovebox/qemu/",
-    "4. extrai Alpine cloud qcow2 → .golovebox/vm/base.img (com qcow2 magic check + marker idempotência)",
-    "5. gera SSH keypair RSA 4096",
-    "6. constrói CIDATA ISO9660 (user-data com SSH key + sshd drop-in PermitRootLogin)",
-    "7. boota VM, cloud-init aplica config (~1m42s), polla SSH até echo ok (até 5 min)"
-  ],
 
   "runtime_layout": {
-    ".golovebox/config.toml": "user config (LLM provider, tokens, ports, qemu_path)",
+    ".golovebox/config.toml": "LLM provider, tokens, ports",
     ".golovebox/qemu/": "flat: qemu-system-x86_64.exe + *.dll + share/qemu/",
-    ".golovebox/vm/base.img": "Alpine cloud qcow2 (~164MB inicial)",
-    ".golovebox/vm/.alpine-image-size": "marker de idempotência do extract",
-    ".golovebox/vm/cidata.iso": "cloud-init NoCloud seed",
-    ".golovebox/vm/id_rsa + id_rsa.pub": "SSH keypair",
-    ".golovebox/vm/qemu.log": "stdout/stderr do QEMU (console serial da VM rodando)",
+    ".golovebox/vm/base.img": "Alpine cloud qcow2 (~164MB)",
+    ".golovebox/vm/qemu.log": "serial console da VM — stdout/stderr do QEMU",
     ".golovebox/memory/": "chromem-go vector store",
-    ".golovebox/skills/": "skills .md (frontmatter TOML + body)",
-    ".golovebox/runs/<run-id>/": "dag.json + node_states.json + specs/ + logs/ + artifacts/ + run_summary.md"
+    ".golovebox/skills/": "skill .md files com frontmatter TOML",
+    ".golovebox/runs/<id>/": "dag.json + node_states.json + task.txt + logs/<node>.jsonl + artifacts/"
   },
 
-  "project_structure": {
-    "magefile.go": "//go:build mage — fetch, build, check, clean",
-    "cmd/golovebox/main.go": "CLI entrypoint, todos os cobra commands (init, reset, web, run, resume, status, exec, github, daemon, skill)",
-    "internal/embed/embed.go": "//go:embed assets/alpine + AlpineImageName + ReadAlpineImage",
-    "internal/embed/embed_windows.go": "//go:embed assets/qemu/windows-amd64",
-    "internal/embed/embed_linux.go": "//go:embed assets/qemu/linux-amd64",
-    "internal/embed/embed_darwin.go": "//go:embed assets/qemu/darwin-arm64",
-    "internal/embed/extract.go": "ExtractQEMU, ExtractAlpineImage (qcow2 magic check + marker idempotência)",
-    "internal/embed/keygen.go": "GenerateSSHKeypair RSA 4096",
-    "internal/embed/cloudinit.go": "CreateCloudInitISO — CIDATA ISO9660 com user-data (SSH key + sshd drop-in via write_files)",
-    "internal/embed/installboot.go": "no-op stubs (cloud image já instalada — função kept for API compat)",
-    "internal/setup/init.go": "7-step init: config wizard primeiro, depois extract/boot/smoke-test; reusa config existente",
-    "internal/sandbox/qemu.go": "Start/Stop, boot device explícito com bootindex, qcow2 validation, QMP retry com StartTimeout, silent stdout/stderr/stdin",
-    "internal/sandbox/qmp.go": "cliente QMP TCP direto",
-    "internal/sandbox/ssh.go": "Dial + Exec helpers",
-    "internal/sandbox/pool.go": "SSH connection pool com liveness check",
-    "internal/config/config.go": "portable paths, TOML load/save",
-    "internal/llm/client.go": "HTTP client OpenAI-compatible + Anthropic + retry exponencial",
-    "internal/dsl/parser.go": "parse spec keywords → AST",
-    "internal/dag/dag.go": "grafo de execução",
-    "internal/dag/executor.go": "paralelo, persist atômico",
-    "internal/dag/checkpoint.go": "pause/gate/notify",
-    "internal/orchestrator/orchestrator.go": "specs → DAG via LLM planning",
-    "internal/agent/loop.go": "ReAct loop + ProgressFunc",
-    "internal/agent/tools.go": "tool registry",
-    "internal/skills/registry.go": "skills locais",
-    "internal/skills/generator.go": "gera skill via LLM",
-    "internal/tools/shell.go": "SSH exec",
-    "internal/tools/files.go": "SFTP read/write",
-    "internal/tools/github.go": "issues + PR + clone via GIT_ASKPASS",
-    "internal/web/server.go": "HTTP + SSE broker",
-    "internal/web/store.go": "RunStore",
-    "internal/web/static/index.html": "web chat + DAG canvas",
-    "internal/memory/memory.go": "chromem-go wrapper",
-    "internal/gateway/gateway.go": "router de canais",
-    "internal/gateway/telegram.go": "Telegram handler"
+  "intention_dsl": {
+    "description": "Plain-language Markdown with optional uppercase keywords",
+    "keywords": {
+      "ATTENTION_HERE": "pauses graph, awaits human review (orange node in canvas)",
+      "PAUSE_TO_REVIEW": "alias for ATTENTION_HERE",
+      "NOTIFY_ME": "sends notification, continues execution",
+      "NOT_TODO": "logged to tech_debt.md, excluded from DAG",
+      "RUN_TEST": "gate node — only advances if tests pass",
+      "TRY ... OR_ELSE ...": "try/fallback node",
+      "WHEN ... DO ...": "wait-for-event node"
+    }
   },
 
-  "roadmap": [
-    { "phase": 1, "name": "Portable Foundation",            "status": "complete", "result": "scaffold, init wizard, QEMU sandbox" },
-    { "phase": 2, "name": "Agent Loop",                     "status": "complete", "result": "ReAct + LLM + GitHub tools + memory" },
-    { "phase": 3, "name": "Gateway + Daemon",               "status": "complete", "result": "Telegram + SSH pool + GIT_ASKPASS + LLM retry" },
-    { "phase": 4, "name": "Orchestrator + Web UI",          "status": "complete", "result": "DAG + web chat + skills + parallel exec" },
-    { "phase": 5, "name": "Self-Contained Binary",          "status": "complete", "result": "embed QEMU+Alpine, mage build pipeline" },
-    { "phase": 6, "name": "QEMU extraction fix",            "status": "complete", "result": "weilnetz.de NSIS silent install (no UAC), flat layout" },
-    { "phase": 7, "name": "Alpine NoCloud + silent boot + reset", "status": "complete", "result": "cloud qcow2 (no install step), QEMU silent (stdio→log), reset cmd, config reuse, sshd drop-in via cloud-init" },
-    { "phase": 8, "name": "Production hardening",           "status": "planned",  "goal": "Auth, HTTPS, multi-tenant, skill marketplace, streaming output" }
+  "out_of_scope_v0": [
+    "parallel multi-agent",
+    "VS Code Server",
+    "Linux/macOS production-tested",
+    "auto-update",
+    "Windows Defender signing",
+    "CDN assets embedded offline (mitigação futura: embed.FS)"
   ],
-
-  "phase_7_changes": {
-    "switched_alpine_source": "Virt ISO → NoCloud cloud qcow2 (3.21.7-bios-cloudinit-r0)",
-    "removed_install_step": "RunInstallBoot e CreateDisk viraram no-ops (cloud image já é base.img instalado)",
-    "silent_qemu": "stdout/stderr→vm/qemu.log, stdin→os.DevNull — terminal do host nunca invadido",
-    "boot_device_explicit": "if=none,id=disk0 + virtio-blk-pci bootindex=0 + -boot order=c,menu=off (em vez do antigo if=virtio ambíguo)",
-    "qcow2_validation": "sandbox.Start() lê magic QFI\\xfb antes de subir QEMU, erro claro em vez do 'could not read boot disk' do SeaBIOS",
-    "idempotency_marker": ".alpine-image-size em vez de comparar fi.Size() (que falhava com qcow2 sparse antigo)",
-    "cloud_init_sshd_dropin": "write_files: /etc/ssh/sshd_config.d/99-golovebox.conf com PermitRootLogin prohibit-password (cloud image vem com PermitRootLogin no)",
-    "qmp_retry": "polling com StartTimeout configurável (default 15s); detect process exit em vez de timeout cego",
-    "config_first": "step2Config (interactive wizard) movido para antes do extract — config.toml gravado em disco antes de qualquer trabalho pesado",
-    "config_reuse": "init detecta config.toml existente, oferece reuso com defaults em [colchetes] (Enter mantém valor antigo)",
-    "reset_command": "golovebox reset (soft) e reset --hard com confirmação (y/N soft, 'yes' literal hard); flag -y para CI",
-    "timeout_flag": "golovebox web --timeout N para ajustar VM start timeout"
-  },
 
   "out_of_scope_v1": [
     "Windows Defender signing",
-    "auto-update do binário",
+    "auto-update",
     "ClaWHub remote skill registry",
     "Jira / Linear / Notion integrations",
     "multi-tenant",
     "mobile UI",
-    "first boot 100% offline (mage fetch precisa de internet em build time)"
-  ],
-
-  "known_limitations": {
-    "binary_size": "~450MB (era ~300MB antes da Phase 7; cloud qcow2 maior que ISO mas elimina ~10 min de install boot)",
-    "tcg_no_kvm_windows": "first cloud-init boot ~1m42s no Windows (emulação software); ~10s com KVM no Linux",
-    "alpine_version_hardcoded": "magefile.go aponta para 3.21.7-r0; atualizar manualmente",
-    "cloud_init_second_boot": "mudanças no cidata.iso após first boot NÃO são reaplicadas — usar golovebox reset para forçar",
-    "x86_64_bios_only": "variantes ARM e UEFI exigiriam args + firmware diferentes"
-  },
-
-  "risks_addressed": [
-    "QEMU portable sem admin → weilnetz.de NSIS silent install (/S) com __COMPAT_LAYER=RunAsInvoker",
-    "Terminal invadido pelo QEMU serial → stdout/stderr→log, stdin→DevNull",
-    "Alpine Virt ISO interativo (sempre travava em localhost login:) → trocado para Alpine NoCloud cloud qcow2",
-    "base.img stale entre upgrades → marker .alpine-image-size + qcow2 magic check",
-    "config.toml perdido em falha do init → wizard movido para step 2 (antes de qualquer trabalho pesado)",
-    "SeaBIOS 'could not read boot disk' críptico → validação de qcow2 magic antes do boot, erro acionável",
-    "PermitRootLogin no na cloud image → sshd drop-in via cloud-init write_files"
-  ],
-
-  "v1_done_definition": "Jogar 10 arquivos de spec DSL no golovebox web, ver DAG gerado, sub-agentes construírem a aplicação na VM, checkpoints pausarem no web chat, resultado ser código testado e PR aberta — a partir de um único .exe, sem instalar nada, sem baixar nada (após mage fetch + mage build), sem passo manual algum."
+    "WASM sandbox (só roda WASM, não git/gcc/npm arbitrários)"
+  ]
 }
