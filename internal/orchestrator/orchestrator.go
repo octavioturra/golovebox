@@ -60,7 +60,24 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 		_ = os.WriteFile(filepath.Join(artifactsDir, "tech_debt.md"), []byte(sb.String()), 0o644)
 	}
 
-	prompt := buildPlanningPrompt(specs, o.cfg)
+	var repoCtx string
+	if o.cfg != nil && o.cfg.DefaultRepo != "" {
+		repoCtx = fmt.Sprintf(
+			"- DefaultRepo: %s\n- GitHubToken disponível: %v\n- Repositório pode já estar em /root/%s na VM\n",
+			o.cfg.DefaultRepo,
+			o.cfg.GitHubToken != "",
+			repoPathFromRepo(o.cfg.DefaultRepo),
+		)
+	} else if o.cfg != nil && o.cfg.Workflow.DefaultRepo != "" {
+		repoCtx = fmt.Sprintf(
+			"- DefaultRepo: %s\n- GitHubToken disponível: %v\n- Repositório pode já estar em %s na VM\n",
+			o.cfg.Workflow.DefaultRepo,
+			o.cfg.GitHubToken != "",
+			o.cfg.Workflow.ClonePath,
+		)
+	}
+
+	prompt := buildPlanningPrompt(specs, o.cfg, repoCtx)
 	reply, err := o.llm.Complete(ctx, []llm.Message{
 		{Role: "user", Content: prompt},
 	})
@@ -129,7 +146,7 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 	return d, nil
 }
 
-func buildPlanningPrompt(specs []*dsl.ParsedSpec, cfg *config.Config) string {
+func buildPlanningPrompt(specs []*dsl.ParsedSpec, cfg *config.Config, repoCtx string) string {
 	var sb strings.Builder
 	sb.WriteString(`You are an execution planner. Read the specs below and produce a JSON execution plan.
 
@@ -146,11 +163,20 @@ Rules:
 - Nodes that are independent of each other must NOT have dependencies between them (they run in parallel)
 - Each node needs a clear, actionable "task" string describing exactly what the agent should do
 - Each node "id" MUST be snake_case and describe the action performed (e.g. "create_auth_handler", "run_unit_tests", "open_pull_request"). NEVER use generic names like "step-1", "step-2", "task-1", "node-1".
+- Tasks involving git MUST include: clone the repo (if not already present), configure remote with token via GIT_ASKPASS, create branch, commit changes, push and open PR
+- Use DefaultRepo from execution context when available
+- The GitHub token is available via GIT_ASKPASS — the agent shell tool already handles authentication
 
 Return ONLY a JSON array, no markdown fences, no explanation:
 [{"id":"string","type":"task|checkpoint|gate|notify|wait_event|try_else|branch|push|pr","task":"string","dependencies":["id",...],"annotation":"string (optional)"}]
 
 `)
+
+	if repoCtx != "" {
+		sb.WriteString("## Execution Context\n\n")
+		sb.WriteString(repoCtx)
+		sb.WriteString("\n\n")
+	}
 
 	if cfg != nil && cfg.Workflow.RunMode == "build_only" {
 		sb.WriteString(`RESTRIÇÃO run_mode=build_only:
@@ -196,6 +222,14 @@ func parseNodeDescriptors(reply string) ([]nodeDescriptor, error) {
 		return nil, fmt.Errorf("unmarshal: %w (input: %.200s)", err, s)
 	}
 	return nodes, nil
+}
+
+func repoPathFromRepo(ownerRepo string) string {
+	parts := strings.SplitN(ownerRepo, "/", 2)
+	if len(parts) == 2 {
+		return parts[1]
+	}
+	return ownerRepo
 }
 
 func validNodeType(t dag.NodeType) bool {
