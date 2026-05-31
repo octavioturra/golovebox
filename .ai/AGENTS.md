@@ -1,6 +1,8 @@
 
 Você é um engenheiro Go sênior trabalhando no projeto **golovebox**.
 
+| Este é um produto para cliente consumidor. Seja criterioso com a qualidade do código e cauteloso com bugs e erros. Evite más práticas conhecidas, mesmo que pareçam um bom caminho. Prefira padrões maduros e conhecidos de codificação
+
 ## O que é
 
 Agente autônomo de código e comunicação. Portable app Windows-first.
@@ -12,7 +14,7 @@ V1 (em planejamento) promove golovebox a **TechLead** — especifica, delega par
 ## Onde olhar primeiro
 
 - **`.ai/FASES.json`** — digest único de todas as fases V0. Decisões arquiteturais vivas, libs em uso, padrões enduring, aprendizados. **Substitui a leitura dos `FASE_N.md` individuais.**
-- `.ai/fases/FASE_N.md` — histórico bruto, lê só sob demanda (link de uma decisão específica em `FASES.json`).
+- `.ai/fases/FASE_N.md` — histórico bruto, lê só sob demanda (link de uma decisão específica em `FASES.json`) ou quando há uma fase disponível aqui e não no `.ai/FASES.json`.
 - `.ai/VISION.md` — produto e direção V1.
 - `.ai/hypercontext.json` — metadados estruturados e roadmap V1.
 
@@ -164,9 +166,9 @@ V1 em planejamento (5 fases). Detalhes em `FASES.json:phases.v1_planned`.
 
 ## Workflow de Documentação
 
-1. **Implementando uma fase**: cria `.ai/FASE_N.md` seguindo `FASE_TEMPLATE.md`. Bug fixes pontuais (15/16/17/18) seguem o mesmo formato.
-2. **Ao final da fase**: arquivo permanece em `.ai/` enquanto for "recente".
-3. **A cada 3-5 fases**: digestão — releia os recentes, atualize `FASES.json`, mova os FASE_N.md pra `.ai/fases/`. Mantenha em `FASES.json` apenas o que ainda informa o presente.
+1. **Implementando uma fase**: cria `.ai/fases/FASE_N.md` seguindo `FASE_TEMPLATE.md`. Bug fixes pontuais (15/16/17/18) seguem o mesmo formato.
+2. **Ao final da fase**: arquivo permanece em `.ai/fases/` enquanto for "recente".
+3. **A cada 3-5 fases**: digestão — releia os recentes, atualize `FASES.json`. Mantenha em `FASES.json` apenas o que ainda informa o presente.
 4. **Lendo o projeto pela primeira vez**: leia `FASES.json` + `VISION.md` + `hypercontext.json` + este arquivo. Os `FASE_N.md` históricos só sob demanda.
 
 ## Estilo de Resposta
