@@ -3,6 +3,8 @@ module github.com/user/golovebox
 go 1.26
 
 require (
+	github.com/user/golovebox/core v0.0.0-00010101000000-000000000000
+	github.com/user/golovebox/promptlang v0.0.0-00010101000000-000000000000
 	github.com/BurntSushi/toml v1.6.0
 	github.com/digitalocean/go-qemu v0.0.0-20250212194115-ee9b0668d242
 	github.com/go-chi/chi/v5 v5.3.0
@@ -25,4 +27,9 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	golang.org/x/sys v0.41.0 // indirect
+)
+
+replace (
+	github.com/user/golovebox/core => ./core
+	github.com/user/golovebox/promptlang => ./promptlang
 )

@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/user/golovebox/core"
 	"github.com/user/golovebox/internal/config"
 	"github.com/user/golovebox/internal/dag"
-	"github.com/user/golovebox/internal/dsl"
 	"github.com/user/golovebox/internal/llm"
 	"github.com/user/golovebox/internal/memory"
 )
@@ -39,15 +39,15 @@ type nodeDescriptor struct {
 
 // Plan sends specs to the LLM and constructs a DAG from the resulting JSON plan.
 // NOT_TODO items are written to tech_debt.md inside runDir (if provided).
-func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.ParsedSpec, runDir string) (*dag.DAG, error) {
-	if len(specs) == 0 {
+func (o *Orchestrator) Plan(ctx context.Context, runID string, intents []core.Intent, runDir string) (*dag.DAG, error) {
+	if len(intents) == 0 {
 		return nil, fmt.Errorf("orchestrator: no specs provided")
 	}
 
 	// Collect tech debts and write to file.
 	var debts []string
-	for _, s := range specs {
-		debts = append(debts, s.TechDebts...)
+	for _, intent := range intents {
+		debts = append(debts, intent.TechDebts...)
 	}
 	if len(debts) > 0 && runDir != "" {
 		artifactsDir := filepath.Join(runDir, "artifacts")
@@ -77,7 +77,7 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 		)
 	}
 
-	prompt := buildPlanningPrompt(specs, o.cfg, repoCtx)
+	prompt := buildPlanningPrompt(intents, o.cfg, repoCtx)
 	reply, err := o.llm.Complete(ctx, []llm.Message{
 		{Role: "user", Content: prompt},
 	})
@@ -102,7 +102,6 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 		if err := d.AddNode(syncNode); err != nil {
 			return nil, fmt.Errorf("orchestrator: add sync_repo: %w", err)
 		}
-		// All LLM nodes will depend on sync_repo — added below.
 	}
 
 	for _, nd := range nodes {
@@ -132,11 +131,9 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 		}
 	}
 	for _, nd := range nodes {
-		// sync_repo is managed by the orchestrator — skip LLM-generated edges for it.
 		if nd.ID == "sync_repo" || dag.NodeType(nd.Type) == dag.TypeSyncRepo {
 			continue
 		}
-		// Add sync_repo edge for root nodes.
 		if o.cfg != nil && workflowRepo(o.cfg) != "" {
 			if len(nd.Dependencies) == 0 {
 				if err := d.AddEdge("sync_repo", nd.ID); err != nil {
@@ -145,7 +142,6 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 			}
 		}
 		for _, dep := range nd.Dependencies {
-			// Skip edges referencing sync_repo since it's already wired via root-node logic.
 			if dep == "sync_repo" {
 				continue
 			}
@@ -155,46 +151,39 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 		}
 	}
 
-	enforceWorkflowOrdering(d, specs)
+	enforceWorkflowOrdering(d, intents)
 
 	return d, nil
 }
 
-// enforceWorkflowOrdering guarantees that when a spec contains NEW BRANCH / PUSH / PR
-// annotations, the DAG ends up with the correct workflow node types AND the right
-// dependency chain: sync_repo → branch → edits (parallel) → push → pr.
-//
-// This is defensive — the LLM is instructed to do this via the prompt, but it
-// frequently emits generic `task` nodes named "push_…" or "open_pull_request" with
-// missing dependencies. Without this pass the agent loop runs inside those nodes and
-// confuses base/head, causing PR 422 errors and files created outside the branch.
-func enforceWorkflowOrdering(d *dag.DAG, specs []*dsl.ParsedSpec) {
-	// Detect required workflow nodes from spec annotations.
-	hasBranchKw, hasPushKw, hasPRKw := false, false, false
+// enforceWorkflowOrdering guarantees that when a spec contains branch/push/pr steps,
+// the DAG ends up with the correct workflow node types AND the right dependency chain:
+// sync_repo → branch → edits (parallel) → push → pr.
+func enforceWorkflowOrdering(d *dag.DAG, intents []core.Intent) {
+	hasBranch, hasPush, hasPR := false, false, false
 	branchName, prTitle := "", ""
-	for _, s := range specs {
-		for _, a := range s.Annotations {
-			switch a.Keyword {
-			case dsl.KwNewBranch:
-				hasBranchKw = true
+	for _, intent := range intents {
+		for _, s := range intent.Steps {
+			switch s.Kind {
+			case core.KindBranch:
+				hasBranch = true
 				if branchName == "" {
-					branchName = a.Argument
+					branchName = s.Title
 				}
-			case dsl.KwPush:
-				hasPushKw = true
-			case dsl.KwPR:
-				hasPRKw = true
+			case core.KindPush:
+				hasPush = true
+			case core.KindPR:
+				hasPR = true
 				if prTitle == "" {
-					prTitle = a.Argument
+					prTitle = s.Title
 				}
 			}
 		}
 	}
-	if !hasBranchKw && !hasPushKw && !hasPRKw {
-		return // nothing to enforce
+	if !hasBranch && !hasPush && !hasPR {
+		return
 	}
 
-	// Find existing workflow nodes (LLM may already have produced them correctly).
 	var branchNode, pushNode, prNode *dag.Node
 	for _, n := range d.Nodes {
 		switch n.Type {
@@ -207,13 +196,12 @@ func enforceWorkflowOrdering(d *dag.DAG, specs []*dsl.ParsedSpec) {
 		}
 	}
 
-	// Upgrade task-typed nodes to workflow types when ID matches by heuristic.
 	for _, n := range d.Nodes {
 		if n.Type != dag.TypeTask {
 			continue
 		}
 		idLower := strings.ToLower(n.ID)
-		if hasBranchKw && branchNode == nil && strings.Contains(idLower, "branch") {
+		if hasBranch && branchNode == nil && strings.Contains(idLower, "branch") {
 			n.Type = dag.TypeBranch
 			if n.Annotation == "" {
 				n.Annotation = branchName
@@ -221,12 +209,12 @@ func enforceWorkflowOrdering(d *dag.DAG, specs []*dsl.ParsedSpec) {
 			branchNode = n
 			continue
 		}
-		if hasPushKw && pushNode == nil && strings.Contains(idLower, "push") {
+		if hasPush && pushNode == nil && strings.Contains(idLower, "push") {
 			n.Type = dag.TypePush
 			pushNode = n
 			continue
 		}
-		if hasPRKw && prNode == nil && (strings.Contains(idLower, "pull_request") ||
+		if hasPR && prNode == nil && (strings.Contains(idLower, "pull_request") ||
 			strings.Contains(idLower, "pullrequest") ||
 			strings.Contains(idLower, "open_pr") ||
 			idLower == "pr" || strings.HasSuffix(idLower, "_pr")) {
@@ -239,9 +227,8 @@ func enforceWorkflowOrdering(d *dag.DAG, specs []*dsl.ParsedSpec) {
 		}
 	}
 
-	// Inject any still-missing workflow nodes.
 	syncRepoExists := d.Nodes["sync_repo"] != nil
-	if hasBranchKw && branchNode == nil {
+	if hasBranch && branchNode == nil {
 		deps := []string{}
 		if syncRepoExists {
 			deps = append(deps, "sync_repo")
@@ -258,7 +245,7 @@ func enforceWorkflowOrdering(d *dag.DAG, specs []*dsl.ParsedSpec) {
 			_ = d.AddEdge("sync_repo", branchNode.ID)
 		}
 	}
-	if hasPushKw && pushNode == nil {
+	if hasPush && pushNode == nil {
 		pushNode = &dag.Node{
 			ID:   "push_branch",
 			Type: dag.TypePush,
@@ -266,7 +253,7 @@ func enforceWorkflowOrdering(d *dag.DAG, specs []*dsl.ParsedSpec) {
 		}
 		_ = d.AddNode(pushNode)
 	}
-	if hasPRKw && prNode == nil {
+	if hasPR && prNode == nil {
 		prNode = &dag.Node{
 			ID:         "open_pr",
 			Type:       dag.TypePR,
@@ -298,7 +285,6 @@ func enforceWorkflowOrdering(d *dag.DAG, specs []*dsl.ParsedSpec) {
 		return t == dag.TypeBranch || t == dag.TypePush || t == dag.TypePR || t == dag.TypeSyncRepo
 	}
 
-	// All non-workflow nodes (except sync_repo) depend on branch.
 	if branchNode != nil {
 		for _, n := range d.Nodes {
 			if n.ID == branchNode.ID || isWorkflow(n.Type) {
@@ -308,7 +294,6 @@ func enforceWorkflowOrdering(d *dag.DAG, specs []*dsl.ParsedSpec) {
 		}
 	}
 
-	// Push depends on all non-workflow nodes and on branch.
 	if pushNode != nil {
 		for _, n := range d.Nodes {
 			if n.ID == pushNode.ID || isWorkflow(n.Type) {
@@ -321,7 +306,6 @@ func enforceWorkflowOrdering(d *dag.DAG, specs []*dsl.ParsedSpec) {
 		}
 	}
 
-	// PR depends on push (or on branch if no push).
 	if prNode != nil {
 		switch {
 		case pushNode != nil:
@@ -332,7 +316,7 @@ func enforceWorkflowOrdering(d *dag.DAG, specs []*dsl.ParsedSpec) {
 	}
 }
 
-func buildPlanningPrompt(specs []*dsl.ParsedSpec, cfg *config.Config, repoCtx string) string {
+func buildPlanningPrompt(intents []core.Intent, cfg *config.Config, repoCtx string) string {
 	var sb strings.Builder
 	sb.WriteString(`You are an execution planner. Read the specs below and produce a JSON execution plan.
 
@@ -402,12 +386,21 @@ Se o spec pedir para "servir" ou "rodar" a aplicação, trate como NOT_TODO.
 `)
 	}
 
-	for _, s := range specs {
-		sb.WriteString(fmt.Sprintf("## Spec: %s\n\n", s.FilePath))
-		sb.WriteString(s.Content)
+	for _, intent := range intents {
+		sb.WriteString(fmt.Sprintf("## Spec: %s\n\n", intent.Source))
+		sb.WriteString(intent.Raw)
 		sb.WriteString("\n\nAnnotations in this spec:\n")
-		for _, a := range s.Annotations {
-			sb.WriteString(fmt.Sprintf("  - %s: %s (line %d)\n", a.Keyword, a.Argument, a.Line))
+		for _, s := range intent.Steps {
+			switch s.Kind {
+			case core.KindBranch:
+				sb.WriteString(fmt.Sprintf("  - NEW BRANCH: %s (line %d)\n", s.Title, s.Line))
+			case core.KindPR:
+				sb.WriteString(fmt.Sprintf("  - PR: %s (line %d)\n", s.Title, s.Line))
+			case core.KindTryElse:
+				sb.WriteString(fmt.Sprintf("  - TRY: %s OR_ELSE: %s (line %d)\n", s.Text, s.OrElse, s.Line))
+			default:
+				sb.WriteString(fmt.Sprintf("  - %s: %s (line %d)\n", s.Kind, s.Text, s.Line))
+			}
 		}
 		sb.WriteString("\n")
 	}
@@ -417,14 +410,12 @@ Se o spec pedir para "servir" ou "rodar" a aplicação, trate como NOT_TODO.
 
 // parseNodeDescriptors extracts the JSON array from the LLM reply.
 func parseNodeDescriptors(reply string) ([]nodeDescriptor, error) {
-	// Strip accidental markdown fences.
 	s := strings.TrimSpace(reply)
 	s = strings.TrimPrefix(s, "```json")
 	s = strings.TrimPrefix(s, "```")
 	s = strings.TrimSuffix(s, "```")
 	s = strings.TrimSpace(s)
 
-	// Find the JSON array bounds.
 	start := strings.Index(s, "[")
 	end := strings.LastIndex(s, "]")
 	if start < 0 || end <= start {
@@ -439,9 +430,6 @@ func parseNodeDescriptors(reply string) ([]nodeDescriptor, error) {
 	return nodes, nil
 }
 
-// workflowRepo returns the repo to clone, falling back to top-level DefaultRepo
-// when workflow.default_repo is not set — so users with only the top-level
-// setting still get sync_repo auto-injection.
 func workflowRepo(cfg *config.Config) string {
 	if cfg == nil {
 		return ""

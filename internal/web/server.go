@@ -19,10 +19,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/user/golovebox/core"
 	"github.com/user/golovebox/internal/config"
 	"github.com/user/golovebox/internal/dag"
-	"github.com/user/golovebox/internal/dsl"
 	"github.com/user/golovebox/internal/gateway"
+	"github.com/user/golovebox/promptlang"
 	"github.com/user/golovebox/internal/llm"
 	"github.com/user/golovebox/internal/orchestrator"
 	"github.com/user/golovebox/internal/skills"
@@ -178,13 +179,17 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.SaveSpec(runID, fh.Filename, data)
 	}
 
-	specFiles, err := dsl.ParseDir(s.store.SpecsDir(runID))
-	if err != nil || len(specFiles) == 0 {
+	parsed, err := promptlang.ParseDir(s.store.SpecsDir(runID))
+	if err != nil || len(parsed) == 0 {
 		http.Error(w, "no valid .md spec files found", http.StatusBadRequest)
 		return
 	}
+	intents := make([]core.Intent, len(parsed))
+	for i, p := range parsed {
+		intents[i] = promptlang.ToIntent(p)
+	}
 
-	s.launchRun(w, r.Context(), runID, specFiles)
+	s.launchRun(w, r.Context(), runID, intents)
 }
 
 func (s *Server) startRunFromTask(w http.ResponseWriter, ctx context.Context, task string) {
@@ -200,13 +205,17 @@ func (s *Server) startRunFromTask(w http.ResponseWriter, ctx context.Context, ta
 	content := "# Task\n\n" + task + "\n"
 	_ = s.store.SaveSpec(runID, "task.md", []byte(content))
 
-	specFiles, err := dsl.ParseDir(s.store.SpecsDir(runID))
-	if err != nil || len(specFiles) == 0 {
+	parsed, err := promptlang.ParseDir(s.store.SpecsDir(runID))
+	if err != nil || len(parsed) == 0 {
 		// Fallback: treat raw text as single-node task directly.
 		s.launchSingleTask(w, ctx, runID, task)
 		return
 	}
-	s.launchRun(w, ctx, runID, specFiles)
+	intents := make([]core.Intent, len(parsed))
+	for i, p := range parsed {
+		intents[i] = promptlang.ToIntent(p)
+	}
+	s.launchRun(w, ctx, runID, intents)
 }
 
 func (s *Server) launchSingleTask(w http.ResponseWriter, ctx context.Context, runID, task string) {
@@ -240,9 +249,9 @@ func (s *Server) launchSingleTask(w http.ResponseWriter, ctx context.Context, ru
 	writeJSON(w, map[string]string{"run_id": runID})
 }
 
-func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID string, specFiles []*dsl.ParsedSpec) {
+func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID string, intents []core.Intent) {
 	runDir := s.store.RunDir(runID)
-	d, err := s.orch.Plan(ctx, runID, specFiles, runDir)
+	d, err := s.orch.Plan(ctx, runID, intents, runDir)
 	if err != nil {
 		http.Error(w, "plan: "+err.Error(), http.StatusInternalServerError)
 		return

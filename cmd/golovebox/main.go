@@ -17,10 +17,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/user/golovebox/core"
 	"github.com/user/golovebox/internal/config"
 	"github.com/user/golovebox/internal/dag"
-	"github.com/user/golovebox/internal/dsl"
 	"github.com/user/golovebox/internal/gateway"
+	"github.com/user/golovebox/promptlang"
 	"github.com/user/golovebox/internal/llm"
 	"github.com/user/golovebox/internal/orchestrator"
 	"github.com/user/golovebox/internal/sandbox"
@@ -331,22 +332,25 @@ func newRunCmd() *cobra.Command {
 			orch := orchestrator.New(llmClient, nil, cfg)
 
 			// Parse specs.
-			var specs []*dsl.ParsedSpec
+			var intents []core.Intent
 			info, err := os.Stat(args[0])
 			if err != nil {
 				return fmt.Errorf("stat %s: %w", args[0], err)
 			}
 			if info.IsDir() {
-				specs, err = dsl.ParseDir(args[0])
-			} else {
-				var s *dsl.ParsedSpec
-				s, err = dsl.ParseFile(args[0])
-				if err == nil {
-					specs = []*dsl.ParsedSpec{s}
+				parsed, parseErr := promptlang.ParseDir(args[0])
+				if parseErr != nil {
+					return fmt.Errorf("parse: %w", parseErr)
 				}
-			}
-			if err != nil {
-				return fmt.Errorf("parse: %w", err)
+				for _, p := range parsed {
+					intents = append(intents, promptlang.ToIntent(p))
+				}
+			} else {
+				p, parseErr := promptlang.ParseFile(args[0])
+				if parseErr != nil {
+					return fmt.Errorf("parse: %w", parseErr)
+				}
+				intents = []core.Intent{promptlang.ToIntent(p)}
 			}
 
 			runsDir, err := cfg.RunsDir()
@@ -364,7 +368,7 @@ func newRunCmd() *cobra.Command {
 			runDir := store.RunDir(runID)
 			fmt.Printf("Run: %s\n", runID)
 
-			d, err := orch.Plan(ctx, runID, specs, runDir)
+			d, err := orch.Plan(ctx, runID, intents, runDir)
 			if err != nil {
 				return fmt.Errorf("plan: %w", err)
 			}
