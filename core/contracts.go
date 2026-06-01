@@ -78,3 +78,40 @@ type SkillMeta struct {
 type Provisioner interface {
 	Provision(ctx context.Context, skill SkillMeta) error
 }
+
+// --- LLM ---
+
+// Completer is the minimal LLM contract: one prompt in, one reply out.
+// Promoted from toolskills.CompleteFn now that derivator is the second consumer.
+type Completer interface {
+	Complete(ctx context.Context, prompt string) (string, error)
+}
+
+// --- Derivation ---
+
+// PromptPriority classifies a prompt node within the graph.
+type PromptPriority string
+
+const (
+	PriorityCritical  PromptPriority = "critical"
+	PriorityEnabling  PromptPriority = "enabling"
+	PriorityAccessory PromptPriority = "accessory"
+)
+
+// PromptNode is a single prompt within a PromptGraph.
+type PromptNode struct {
+	ID        string
+	Text      string
+	Priority  PromptPriority
+	DependsOn []string
+}
+
+// PromptGraph is the output of a Deriver — a prioritised graph of prompts.
+type PromptGraph struct {
+	Nodes []PromptNode
+}
+
+// Deriver turns a seed text into a prioritised PromptGraph.
+type Deriver interface {
+	Derive(ctx context.Context, seed string) (PromptGraph, error)
+}

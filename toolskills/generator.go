@@ -7,15 +7,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/user/golovebox/core"
 )
 
-// CompleteFn is a function that sends a prompt to an LLM and returns the reply.
-// Callers inject this to avoid a direct dependency on internal/llm.
-type CompleteFn func(ctx context.Context, prompt string) (string, error)
 
 // Generate asks the LLM to create a new skill file from a plain-language description,
 // saves it in dir, and returns the parsed Skill.
-func Generate(ctx context.Context, complete CompleteFn, description, dir string) (*Skill, error) {
+func Generate(ctx context.Context, llm core.Completer, description, dir string) (*Skill, error) {
 	prompt := fmt.Sprintf(`Generate a golovebox skill file for the following purpose:
 "%s"
 
@@ -35,7 +34,7 @@ Detailed prompt instructions for the agent...
 - Example 2
 `, description)
 
-	reply, err := complete(ctx, prompt)
+	reply, err := llm.Complete(ctx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("skills: generate: %w", err)
 	}

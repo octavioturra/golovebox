@@ -569,10 +569,7 @@ func newSkillCmd() *cobra.Command {
 				APIKey:  cfg.APIKey,
 				Model:   cfg.LLMModel,
 			})
-			completeFn := func(ctx context.Context, prompt string) (string, error) {
-				return llmClient.Complete(ctx, []llm.Message{{Role: "user", Content: prompt}})
-			}
-			sk, err := toolskills.Generate(cmd.Context(), completeFn, args[0], skillsDir)
+			sk, err := toolskills.Generate(cmd.Context(), llm.NewCompleter(llmClient), args[0], skillsDir)
 			if err != nil {
 				return err
 			}

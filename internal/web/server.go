@@ -470,10 +470,7 @@ func (s *Server) handleGenerateSkill(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	completeFn := func(ctx context.Context, prompt string) (string, error) {
-		return s.llmClient.Complete(ctx, []llm.Message{{Role: "user", Content: prompt}})
-	}
-	sk, err := toolskills.Generate(r.Context(), completeFn, body.Description, skillsDir)
+	sk, err := toolskills.Generate(r.Context(), llm.NewCompleter(s.llmClient), body.Description, skillsDir)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

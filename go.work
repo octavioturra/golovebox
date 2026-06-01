@@ -6,4 +6,5 @@ use (
 	./promptlang
 	./sandbox
 	./toolskills
+	./derivator
 )
