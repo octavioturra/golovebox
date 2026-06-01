@@ -1,0 +1,11 @@
+go 1.26
+
+use (
+	.
+	./core
+	./derivator
+	./orchestrator
+	./promptlang
+	./sandbox
+	./toolskills
+)
