@@ -106,6 +106,10 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 	}
 
 	for _, nd := range nodes {
+		// sync_repo is injected directly above — skip any LLM-generated duplicate.
+		if nd.ID == "sync_repo" || dag.NodeType(nd.Type) == dag.TypeSyncRepo {
+			continue
+		}
 		nodeType := dag.NodeType(nd.Type)
 		if !validNodeType(nodeType) {
 			nodeType = dag.TypeTask
@@ -118,7 +122,7 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 			Annotation:   nd.Annotation,
 		}
 		// If sync_repo is injected, all root nodes (no dependencies) must wait for it.
-		if o.cfg != nil && workflowRepo(o.cfg) != "" && nd.ID != "sync_repo" {
+		if o.cfg != nil && workflowRepo(o.cfg) != "" {
 			if len(nd.Dependencies) == 0 {
 				n.Dependencies = []string{"sync_repo"}
 			}
@@ -128,8 +132,12 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 		}
 	}
 	for _, nd := range nodes {
+		// sync_repo is managed by the orchestrator — skip LLM-generated edges for it.
+		if nd.ID == "sync_repo" || dag.NodeType(nd.Type) == dag.TypeSyncRepo {
+			continue
+		}
 		// Add sync_repo edge for root nodes.
-		if o.cfg != nil && workflowRepo(o.cfg) != "" && nd.ID != "sync_repo" {
+		if o.cfg != nil && workflowRepo(o.cfg) != "" {
 			if len(nd.Dependencies) == 0 {
 				if err := d.AddEdge("sync_repo", nd.ID); err != nil {
 					return nil, fmt.Errorf("orchestrator: sync_repo edge to %s: %w", nd.ID, err)
@@ -137,6 +145,10 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, specs []*dsl.Pars
 			}
 		}
 		for _, dep := range nd.Dependencies {
+			// Skip edges referencing sync_repo since it's already wired via root-node logic.
+			if dep == "sync_repo" {
+				continue
+			}
 			if err := d.AddEdge(dep, nd.ID); err != nil {
 				return nil, fmt.Errorf("orchestrator: add edge %s→%s: %w", dep, nd.ID, err)
 			}
@@ -336,7 +348,8 @@ Rules:
 - NOT_TODO items must NOT appear as nodes
 
 CRITICAL ORDERING when these workflow annotations exist:
-  sync_repo → branch → <all edit/test/notify nodes in parallel between themselves> → push → pr
+  branch → <all edit/test/notify nodes in parallel between themselves> → push → pr
+  (a sync_repo step is auto-prepended by the system — do NOT include it in your plan)
   - Every edit/test node MUST depend on the branch node (do not create files outside the new branch)
   - The push node MUST depend on every edit/test node
   - The pr node MUST depend on the push node

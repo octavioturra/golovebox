@@ -3,8 +3,8 @@
     "purpose": "Digest único de todas as fases V0 do golovebox. Substitui a leitura dos FASE_N.md individuais. Mantenha aqui apenas o que ainda informa o presente: decisões arquiteturais vivas, libs em uso, padrões enduring. Bugs já corrigidos viram aprendizado (não recipe).",
     "source_history": ".ai/fases/FASE_N.md (versionado, leitura sob demanda)",
     "digest_policy": "A cada 3-5 fases novas, releia os FASE_N.md recentes, atualize este JSON, e remova daqui o que se tornou obsoleto. Evite virar changelog — este é um mapa do estado atual.",
-    "last_digested_phase": 18,
-    "last_updated": "2026-05-31"
+    "last_digested_phase": 20,
+    "last_updated": "2026-06-01"
   },
 
   "phases": {
@@ -26,7 +26,9 @@
       {"id": 15, "name": "Bugfix $HOME / 404 / 503",  "delivered": ".gitconfig via write_files (não runcmd), handleGetRun degrada se dag.json ausente, IsVMReady probe, terminal dial retry"},
       {"id": 16, "name": "UX & Observabilidade",      "delivered": "Prompt+reply do LLM persistidos por iter no NodeLog, health auto-poll 5s, branch no nodePanel, terminal espera IsVMReady"},
       {"id": 17, "name": "Execução Correta",          "delivered": "credential.helper=store + ~/.git-credentials persistente, parseAction heredoc <<EOF, orchestrator gera task auto-contida"},
-      {"id": 18, "name": "Bugfix Residuais",          "delivered": "Pool.Acquire retry dial 4×, fallback workflowRepo (top-level→workflow), SyncRepo mkdir -p parent, auto-abre nodePanel em erro"}
+      {"id": 18, "name": "Bugfix Residuais",          "delivered": "Pool.Acquire retry dial 4×, fallback workflowRepo (top-level→workflow), SyncRepo mkdir -p parent, auto-abre nodePanel em erro"},
+      {"id": 19, "name": "UX + Orchestrator Workflow", "delivered": "enforceWorkflowOrdering defensivo (branch→edits→push→pr), prompt endurecido com BAD/GOOD, chat persiste em glb_chat (cap 200), timer mm:ss VM no healthPanel, terminal aguarda vm-ready, runList refetch on sse-state-change, dagre no init + nodeSep/rankSep, persistência de posições glb_positions_<runId>, botão reorganizar"},
+      {"id": 20, "name": "Bugfix sync_repo duplicate", "delivered": "Filtro de nodes LLM com id/type sync_repo antes de AddNode (orchestrator auto-injeta; LLM não deve duplicar); prompt remove menção sync_repo do ordering hint"}
     ],
     "v1_planned": [
       {"id": "v1_fase1", "name": "CLI Delegation",     "scope": "CodingAgent interface (Claude Code/Codex/Gemini adapters), delegate_code + verify_implementation tools, .ai/ convention, VM cloud-init instala CLI configurado"},
@@ -67,7 +69,7 @@
     "git_workflow": {
       "git_askpass_uuid": "Script em /tmp/.glb_askpass_<uuid>.sh — token nunca em URL nem em ps. UUID evita colisão entre runs paralelos.",
       "credential_helper_persistent": "Cloud-init grava [credential] helper=store no .gitconfig. Após clone, writeGitCredentials() persiste /root/.git-credentials (0600) com https://x-token:TOKEN@github.com. Qualquer `git push` via shell tool autentica sem GIT_ASKPASS (FASE 17).",
-      "sync_repo_auto_injected": "Orchestrator injeta sync_repo como primeiro node quando workflowRepo(cfg) != ''. Fallback: cfg.Workflow.DefaultRepo → cfg.DefaultRepo. Todos os nodes raiz dependem dele (FASE 13/18).",
+      "sync_repo_auto_injected": "Orchestrator injeta sync_repo como primeiro node quando workflowRepo(cfg) != ''. Fallback: cfg.Workflow.DefaultRepo → cfg.DefaultRepo. Todos os nodes raiz dependem dele (FASE 13/18). O prompt NÃO deve mencionar sync_repo no ordering hint — o LLM inclui o node no JSON e causa duplicate (FASE 20).",
       "branch_per_task": "TypeBranch dispatch escreve current_branch em run_meta.json. TypePush e TypePR leem de lá. ExecPR detecta PR open existente e atualiza body em vez de criar duplicata."
     }
   },
