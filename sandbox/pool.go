@@ -18,7 +18,6 @@ type PoolConfig struct {
 }
 
 // Pool maintains a set of idle SSH connections and creates new ones on demand.
-// Connections are reused across tool calls to avoid per-call handshake overhead.
 type Pool struct {
 	mu   sync.Mutex
 	idle []*ssh.Client
@@ -31,10 +30,8 @@ func NewPool(cfg PoolConfig) *Pool {
 }
 
 // Acquire returns an idle connection from the pool, or dials a new one.
-// Idle connections are validated with a keepalive before being returned;
-// stale connections are discarded and the next one is tried.
-// Respects ctx cancellation — returns ctx.Err() if the context is done before a
-// new connection is established.
+// Idle connections are validated with a keepalive before being returned.
+// Respects ctx cancellation.
 func (p *Pool) Acquire(ctx context.Context) (*ssh.Client, error) {
 	for {
 		p.mu.Lock()
@@ -51,7 +48,6 @@ func (p *Pool) Acquire(ctx context.Context) (*ssh.Client, error) {
 			return c, nil
 		}
 		_ = c.Close()
-		// stale connection discarded — try next idle or dial fresh
 	}
 
 	// Dial fresh with retry — first connect right after VM boot frequently

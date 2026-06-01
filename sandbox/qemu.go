@@ -5,46 +5,43 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
+	"runtime"
 	"time"
-
-	"github.com/user/golovebox/internal/config"
-	embedassets "github.com/user/golovebox/internal/embed"
 )
 
+// Config holds the parameters needed to start and connect to the QEMU sandbox.
+type Config struct {
+	QEMUExe string // path to qemu-system-x86_64[.exe]; auto-detected in QEMUDir if empty
+	QEMUDir string // dir containing the QEMU binary and share/qemu/
+	VMDir   string // dir for base.img, cidata.iso, id_rsa, qemu.log
+	SSHPort int
+	QMPPort int
+	SSHUser string // default "root"
+}
+
+// Manager manages the QEMU VM process lifecycle.
 type Manager struct {
 	cmd     *exec.Cmd
 	qmp     *QMPClient
-	cfg     config.Config
+	cfg     Config
 	logFile *os.File
 }
 
 // StartTimeout controls how long Start waits for QMP to become reachable.
-// Override before calling Start if a slower host needs more time.
 var StartTimeout = 15 * time.Second
 
-func Start(cfg config.Config) (*Manager, error) {
-	vmDir, err := cfg.VMDir()
-	if err != nil {
-		return nil, err
-	}
-	qemuDir, err := cfg.QEMUDir()
-	if err != nil {
-		return nil, err
-	}
-
-	qemuExe := cfg.QEMUPath
+// Start launches the QEMU VM described by cfg and returns a Manager.
+func Start(cfg Config) (*Manager, error) {
+	qemuExe := cfg.QEMUExe
 	if qemuExe == "" {
-		qemuExe = embedassets.QEMUExePath(qemuDir)
+		qemuExe = defaultQEMUExe(cfg.QEMUDir)
 	}
 
-	imgPath := filepath.Join(vmDir, "base.img")
+	imgPath := filepath.Join(cfg.VMDir, "base.img")
 	qmpAddr := fmt.Sprintf("127.0.0.1:%d", cfg.QMPPort)
-	logPath := filepath.Join(vmDir, "qemu.log")
+	logPath := filepath.Join(cfg.VMDir, "qemu.log")
 
-	// Sanity check: make sure base.img is a real qcow2, not an empty placeholder
-	// from an older install. SeaBIOS gives a generic "could not read boot disk"
-	// otherwise, which is impossible to diagnose from inside QEMU.
+	// Sanity check: make sure base.img is a real qcow2.
 	if f, err := os.Open(imgPath); err == nil {
 		var magic [4]byte
 		_, _ = f.Read(magic[:])
@@ -66,8 +63,7 @@ func Start(cfg config.Config) (*Manager, error) {
 		"-m", "2048",
 		"-boot", "order=c,menu=off",
 		// Main disk: if=none + virtio-blk-pci with bootindex=0 ensures SeaBIOS
-		// recognises it as the boot device. The older "if=virtio" syntax does
-		// not always set the bootindex correctly.
+		// recognises it as the boot device.
 		"-drive", "file=" + imgPath + ",format=qcow2,if=none,id=disk0",
 		"-device", "virtio-blk-pci,drive=disk0,bootindex=0",
 		"-netdev", fmt.Sprintf("user,id=net0,hostfwd=tcp::%d-:22", cfg.SSHPort),
@@ -75,10 +71,8 @@ func Start(cfg config.Config) (*Manager, error) {
 		"-qmp", fmt.Sprintf("tcp:%s,server,nowait", qmpAddr),
 	}
 
-	// Attach cloud-init NoCloud datasource (CIDATA ISO) if present. It is
-	// detected by cloud-init at first boot. bootindex omitted on purpose —
-	// SeaBIOS must never try to boot from it.
-	cidataPath := filepath.Join(vmDir, "cidata.iso")
+	// Attach cloud-init NoCloud datasource (CIDATA ISO) if present.
+	cidataPath := filepath.Join(cfg.VMDir, "cidata.iso")
 	if _, err := os.Stat(cidataPath); err == nil {
 		args = append(args,
 			"-drive", "file="+cidataPath+",format=raw,if=none,id=cidata,readonly=on",
@@ -86,8 +80,8 @@ func Start(cfg config.Config) (*Manager, error) {
 		)
 	}
 
-	// Pass firmware directory when using the embedded QEMU binary.
-	shareDir := filepath.Join(qemuDir, "share", "qemu")
+	// Pass firmware directory when the share/ dir exists alongside the binary.
+	shareDir := filepath.Join(cfg.QEMUDir, "share", "qemu")
 	if _, serr := os.Stat(shareDir); serr == nil {
 		args = append([]string{"-L", shareDir}, args...)
 	}
@@ -109,13 +103,11 @@ func Start(cfg config.Config) (*Manager, error) {
 	}
 	devNull.Close()
 
-	// Retry QMP connection for up to 15s — QEMU may take a few seconds to bind.
-	// If QEMU crashes, cmd.Process.Wait() returns, detected via process state.
+	// Retry QMP connection for up to StartTimeout.
 	var qmpClient *QMPClient
 	deadline := time.Now().Add(StartTimeout)
 	for time.Now().Before(deadline) {
 		time.Sleep(500 * time.Millisecond)
-		// Check if the process already exited (crash).
 		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
 			logFile.Close()
 			return nil, fmt.Errorf("qemu exited immediately — check %s", logPath)
@@ -139,6 +131,7 @@ func (m *Manager) IsRunning() bool {
 	return m.cmd != nil && m.cmd.Process != nil
 }
 
+// Stop sends a QMP quit and waits for the process to exit.
 func (m *Manager) Stop() error {
 	if err := m.qmp.Quit(); err != nil {
 		if m.cmd.Process != nil {
@@ -152,19 +145,11 @@ func (m *Manager) Stop() error {
 	return err
 }
 
-func (m *Manager) HealthCheck() error {
-	vmDir, err := m.cfg.VMDir()
-	if err != nil {
-		return err
+// defaultQEMUExe returns the expected QEMU binary path for the current OS.
+func defaultQEMUExe(qemuDir string) string {
+	name := "qemu-system-x86_64"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
 	}
-	client, err := Dial(
-		"127.0.0.1",
-		strconv.Itoa(m.cfg.SSHPort),
-		"root",
-		filepath.Join(vmDir, "id_rsa"),
-	)
-	if err != nil {
-		return fmt.Errorf("ssh health check: %w", err)
-	}
-	return client.Close()
+	return filepath.Join(qemuDir, name)
 }

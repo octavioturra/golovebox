@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,7 +23,7 @@ import (
 	"github.com/user/golovebox/promptlang"
 	"github.com/user/golovebox/internal/llm"
 	"github.com/user/golovebox/internal/orchestrator"
-	"github.com/user/golovebox/internal/sandbox"
+	sandboxpkg "github.com/user/golovebox/sandbox"
 	"github.com/user/golovebox/internal/setup"
 	"github.com/user/golovebox/internal/skills"
 	"github.com/user/golovebox/internal/web"
@@ -56,6 +55,24 @@ func main() {
 	}
 }
 
+func makeSandboxConfig(cfg *config.Config) (sandboxpkg.Config, error) {
+	vmDir, err := cfg.VMDir()
+	if err != nil {
+		return sandboxpkg.Config{}, err
+	}
+	qemuDir, err := cfg.QEMUDir()
+	if err != nil {
+		return sandboxpkg.Config{}, err
+	}
+	return sandboxpkg.Config{
+		QEMUExe: cfg.QEMUPath,
+		QEMUDir: qemuDir,
+		VMDir:   vmDir,
+		SSHPort: cfg.SSHPort,
+		QMPPort: cfg.QMPPort,
+	}, nil
+}
+
 // newExecCmd executes a raw shell command inside the VM.
 func newExecCmd() *cobra.Command {
 	return &cobra.Command{
@@ -67,21 +84,17 @@ func newExecCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			vmDir, err := cfg.VMDir()
+			sbCfg, err := makeSandboxConfig(cfg)
 			if err != nil {
 				return err
 			}
-			client, err := sandbox.Dial(
-				"127.0.0.1",
-				strconv.Itoa(cfg.SSHPort),
-				"root",
-				filepath.Join(vmDir, "id_rsa"),
-			)
+			run, close, err := sandboxpkg.DirectDial("127.0.0.1", sbCfg.SSHPort, "root",
+				filepath.Join(sbCfg.VMDir, "id_rsa"))
 			if err != nil {
 				return err
 			}
-			defer client.Close()
-			stdout, stderr, err := sandbox.Exec(client, args[0])
+			defer close() //nolint:errcheck
+			stdout, stderr, err := run(args[0])
 			if stdout != "" {
 				fmt.Print(stdout)
 			}
@@ -113,20 +126,16 @@ func newStatusCmd() *cobra.Command {
 			fmt.Printf("SSH Port     : %d\n", cfg.SSHPort)
 			fmt.Printf("QMP Port     : %d\n", cfg.QMPPort)
 
-			vmDir, err := cfg.VMDir()
+			sbCfg, err := makeSandboxConfig(cfg)
 			if err != nil {
 				return err
 			}
-			sshClient, sshErr := sandbox.Dial(
-				"127.0.0.1",
-				strconv.Itoa(cfg.SSHPort),
-				"root",
-				filepath.Join(vmDir, "id_rsa"),
-			)
+			_, close, sshErr := sandboxpkg.DirectDial("127.0.0.1", sbCfg.SSHPort, "root",
+				filepath.Join(sbCfg.VMDir, "id_rsa"))
 			if sshErr != nil {
 				fmt.Printf("VM SSH       : DOWN (%v)\n", sshErr)
 			} else {
-				sshClient.Close()
+				_ = close()
 				fmt.Printf("VM SSH       : OK\n")
 			}
 			return nil
@@ -184,24 +193,17 @@ func newGitHubCmd() *cobra.Command {
 			}
 			owner, repo := parts[0], parts[1]
 
-			fmt.Println("Starting VM...")
-			mgr, err := sandbox.Start(*cfg)
-			if err != nil {
-				return fmt.Errorf("start VM: %w", err)
-			}
-			defer mgr.Stop() //nolint:errcheck
-
-			vmDir, err := cfg.VMDir()
+			sbCfg, err := makeSandboxConfig(cfg)
 			if err != nil {
 				return err
 			}
-			pool := sandbox.NewPool(sandbox.PoolConfig{
-				Host:    "127.0.0.1",
-				Port:    cfg.SSHPort,
-				User:    "root",
-				KeyPath: filepath.Join(vmDir, "id_rsa"),
-			})
-			defer pool.Close()
+
+			fmt.Println("Starting VM...")
+			vm, err := sandboxpkg.NewVM(sbCfg)
+			if err != nil {
+				return fmt.Errorf("start VM: %w", err)
+			}
+			defer vm.Stop() //nolint:errcheck
 
 			llmClient := llm.New(llm.Config{
 				BaseURL: cfg.LLMBaseURL,
@@ -209,7 +211,7 @@ func newGitHubCmd() *cobra.Command {
 				Model:   cfg.LLMModel,
 			})
 
-			gw := gateway.New(pool, llmClient, cfg)
+			gw := gateway.New(vm, llmClient, cfg)
 			fmt.Printf("Resolving issue #%d in %s/%s...\n", issueFlag, owner, repo)
 			result, err := gw.RunTask(ctx, owner, repo, issueFlag, nil)
 			if err != nil {
@@ -240,24 +242,17 @@ func newDaemonCmd() *cobra.Command {
 				return fmt.Errorf("config: %w", err)
 			}
 
-			fmt.Println("Starting VM...")
-			mgr, err := sandbox.Start(*cfg)
-			if err != nil {
-				return fmt.Errorf("start VM: %w", err)
-			}
-			defer mgr.Stop() //nolint:errcheck
-
-			vmDir, err := cfg.VMDir()
+			sbCfg, err := makeSandboxConfig(cfg)
 			if err != nil {
 				return err
 			}
-			pool := sandbox.NewPool(sandbox.PoolConfig{
-				Host:    "127.0.0.1",
-				Port:    cfg.SSHPort,
-				User:    "root",
-				KeyPath: filepath.Join(vmDir, "id_rsa"),
-			})
-			defer pool.Close()
+
+			fmt.Println("Starting VM...")
+			vm, err := sandboxpkg.NewVM(sbCfg)
+			if err != nil {
+				return fmt.Errorf("start VM: %w", err)
+			}
+			defer vm.Stop() //nolint:errcheck
 
 			llmClient := llm.New(llm.Config{
 				BaseURL: cfg.LLMBaseURL,
@@ -265,7 +260,7 @@ func newDaemonCmd() *cobra.Command {
 				Model:   cfg.LLMModel,
 			})
 
-			gw := gateway.New(pool, llmClient, cfg)
+			gw := gateway.New(vm, llmClient, cfg)
 
 			if cfg.TelegramToken != "" {
 				th, err := gateway.NewTelegramHandler(cfg.TelegramToken, gw)
@@ -304,31 +299,24 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("config: %w", err)
 			}
 
-			fmt.Println("Starting VM...")
-			mgr, err := sandbox.Start(*cfg)
-			if err != nil {
-				return fmt.Errorf("start VM: %w", err)
-			}
-			defer mgr.Stop() //nolint:errcheck
-
-			vmDir, err := cfg.VMDir()
+			sbCfg, err := makeSandboxConfig(cfg)
 			if err != nil {
 				return err
 			}
-			pool := sandbox.NewPool(sandbox.PoolConfig{
-				Host:    "127.0.0.1",
-				Port:    cfg.SSHPort,
-				User:    "root",
-				KeyPath: filepath.Join(vmDir, "id_rsa"),
-			})
-			defer pool.Close()
+
+			fmt.Println("Starting VM...")
+			vm, err := sandboxpkg.NewVM(sbCfg)
+			if err != nil {
+				return fmt.Errorf("start VM: %w", err)
+			}
+			defer vm.Stop() //nolint:errcheck
 
 			llmClient := llm.New(llm.Config{
 				BaseURL: cfg.LLMBaseURL,
 				APIKey:  cfg.APIKey,
 				Model:   cfg.LLMModel,
 			})
-			gw := gateway.New(pool, llmClient, cfg)
+			gw := gateway.New(vm, llmClient, cfg)
 			orch := orchestrator.New(llmClient, nil, cfg)
 
 			// Parse specs.
@@ -385,19 +373,6 @@ func newRunCmd() *cobra.Command {
 				})
 			}
 
-			// Run checkpoints interactively from stdin.
-			go func() {
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					default:
-					}
-					// Checkpoints are handled inline in the notify goroutine
-					// by prompting on waiting_human nodes.
-				}
-			}()
-
 			exec := dag.NewExecutor(d, dag.ExecutorConfig{}, dispatch, func(node *dag.Node) {
 				notify(node)
 				if node.State == dag.StateWaitingHuman {
@@ -443,35 +418,28 @@ func newWebCmd() *cobra.Command {
 				return fmt.Errorf("config: %w", err)
 			}
 
-			if timeoutFlag > 0 {
-				sandbox.StartTimeout = time.Duration(timeoutFlag) * time.Second
-			}
-
-			fmt.Println("Starting VM...")
-			mgr, err := sandbox.Start(*cfg)
-			if err != nil {
-				return fmt.Errorf("start VM: %w", err)
-			}
-			defer mgr.Stop() //nolint:errcheck
-
-			vmDir, err := cfg.VMDir()
+			sbCfg, err := makeSandboxConfig(cfg)
 			if err != nil {
 				return err
 			}
-			pool := sandbox.NewPool(sandbox.PoolConfig{
-				Host:    "127.0.0.1",
-				Port:    cfg.SSHPort,
-				User:    "root",
-				KeyPath: filepath.Join(vmDir, "id_rsa"),
-			})
-			defer pool.Close()
+
+			if timeoutFlag > 0 {
+				sandboxpkg.StartTimeout = time.Duration(timeoutFlag) * time.Second
+			}
+
+			fmt.Println("Starting VM...")
+			vm, err := sandboxpkg.NewVM(sbCfg)
+			if err != nil {
+				return fmt.Errorf("start VM: %w", err)
+			}
+			defer vm.Stop() //nolint:errcheck
 
 			llmClient := llm.New(llm.Config{
 				BaseURL: cfg.LLMBaseURL,
 				APIKey:  cfg.APIKey,
 				Model:   cfg.LLMModel,
 			})
-			gw := gateway.New(pool, llmClient, cfg)
+			gw := gateway.New(vm, llmClient, cfg)
 			orch := orchestrator.New(llmClient, nil, cfg)
 
 			skillsDir, err := cfg.SkillsDir()
@@ -489,7 +457,7 @@ func newWebCmd() *cobra.Command {
 			}
 			cm := dag.NewCheckpointManager()
 
-			srv, err := web.New(gw, orch, cm, reg, llmClient, cfg, runsDir)
+			srv, err := web.New(gw, vm, orch, cm, reg, llmClient, cfg, runsDir)
 			if err != nil {
 				return err
 			}
@@ -642,31 +610,24 @@ func newResumeCmd() *cobra.Command {
 				return fmt.Errorf("load run %s: %w", runID, err)
 			}
 
-			fmt.Println("Starting VM...")
-			mgr, err := sandbox.Start(*cfg)
-			if err != nil {
-				return fmt.Errorf("start VM: %w", err)
-			}
-			defer mgr.Stop() //nolint:errcheck
-
-			vmDir, err := cfg.VMDir()
+			sbCfg, err := makeSandboxConfig(cfg)
 			if err != nil {
 				return err
 			}
-			pool := sandbox.NewPool(sandbox.PoolConfig{
-				Host:    "127.0.0.1",
-				Port:    cfg.SSHPort,
-				User:    "root",
-				KeyPath: filepath.Join(vmDir, "id_rsa"),
-			})
-			defer pool.Close()
+
+			fmt.Println("Starting VM...")
+			vm, err := sandboxpkg.NewVM(sbCfg)
+			if err != nil {
+				return fmt.Errorf("start VM: %w", err)
+			}
+			defer vm.Stop() //nolint:errcheck
 
 			llmClient := llm.New(llm.Config{
 				BaseURL: cfg.LLMBaseURL,
 				APIKey:  cfg.APIKey,
 				Model:   cfg.LLMModel,
 			})
-			gw := gateway.New(pool, llmClient, cfg)
+			gw := gateway.New(vm, llmClient, cfg)
 			cm := dag.NewCheckpointManager()
 			runDir := store.RunDir(runID)
 

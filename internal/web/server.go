@@ -26,6 +26,7 @@ import (
 	"github.com/user/golovebox/promptlang"
 	"github.com/user/golovebox/internal/llm"
 	"github.com/user/golovebox/internal/orchestrator"
+	sandboxpkg "github.com/user/golovebox/sandbox"
 	"github.com/user/golovebox/internal/skills"
 	"github.com/user/golovebox/internal/tools"
 )
@@ -41,6 +42,8 @@ type sseClient struct {
 // Server is the embedded HTTP server for web chat and DAG visualisation.
 type Server struct {
 	gw              *gateway.Gateway
+	sb              core.Sandbox
+	interactive     *sandboxpkg.VM
 	orch            *orchestrator.Orchestrator
 	checkpoint      *dag.CheckpointManager
 	skillsReg       *skills.Registry
@@ -55,21 +58,23 @@ type Server struct {
 }
 
 // New creates the Server wiring all components together.
-func New(gw *gateway.Gateway, orch *orchestrator.Orchestrator, cm *dag.CheckpointManager, reg *skills.Registry, llmClient *llm.Client, cfg *config.Config, runsDir string) (*Server, error) {
+func New(gw *gateway.Gateway, vm *sandboxpkg.VM, orch *orchestrator.Orchestrator, cm *dag.CheckpointManager, reg *skills.Registry, llmClient *llm.Client, cfg *config.Config, runsDir string) (*Server, error) {
 	store, err := NewRunStore(runsDir)
 	if err != nil {
 		return nil, err
 	}
 	return &Server{
-		gw:         gw,
-		orch:       orch,
-		checkpoint: cm,
-		skillsReg:  reg,
-		llmClient:  llmClient,
-		store:      store,
-		cfg:        cfg,
-		sseClients: make(map[string][]*sseClient),
-		activeRuns: make(map[string]*dag.DAG),
+		gw:          gw,
+		sb:          vm,
+		interactive: vm,
+		orch:        orch,
+		checkpoint:  cm,
+		skillsReg:   reg,
+		llmClient:   llmClient,
+		store:       store,
+		cfg:         cfg,
+		sseClients:  make(map[string][]*sseClient),
+		activeRuns:  make(map[string]*dag.DAG),
 	}, nil
 }
 
@@ -273,12 +278,7 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 		// Workflow node types are dispatched directly, not through the agent loop.
 		switch node.Type {
 		case dag.TypeSyncRepo:
-			client, err := s.gw.AcquireSSH(dCtx)
-			if err != nil {
-				return "", err
-			}
-			defer s.gw.ReleaseSSH(client)
-			return tools.SyncRepo(dCtx, client,
+			return tools.SyncRepo(dCtx, s.sb,
 				s.cfg.GitHubToken,
 				resolveRepo(s.cfg),
 				s.cfg.Workflow.ClonePath,
@@ -286,29 +286,19 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 			)
 
 		case dag.TypeBranch:
-			client, err := s.gw.AcquireSSH(dCtx)
-			if err != nil {
-				return "", err
-			}
-			defer s.gw.ReleaseSSH(client)
 			branchName := node.Annotation
 			if branchName == "" {
 				branchName = node.Task
 			}
-			out, err := tools.ExecBranch(client, s.cfg.Workflow.ClonePath, branchName)
+			out, err := tools.ExecBranch(dCtx, s.sb, s.cfg.Workflow.ClonePath, branchName)
 			if err == nil {
 				s.store.SetRunMeta(runID, "current_branch", branchName)
 			}
 			return out, err
 
 		case dag.TypePush:
-			client, err := s.gw.AcquireSSH(dCtx)
-			if err != nil {
-				return "", err
-			}
-			defer s.gw.ReleaseSSH(client)
 			branch := s.store.GetRunMeta(runID, "current_branch")
-			return tools.ExecPush(client, s.cfg.GitHubToken, s.cfg.Workflow.ClonePath, branch)
+			return tools.ExecPush(dCtx, s.sb, s.cfg.GitHubToken, s.cfg.Workflow.ClonePath, branch)
 
 		case dag.TypePR:
 			parts := strings.SplitN(resolveRepo(s.cfg), "/", 2)

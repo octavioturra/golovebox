@@ -1,11 +1,33 @@
 // Package core defines the shared domain types and interfaces for golovebox.
-// It has zero external dependencies — not even stdlib beyond primitive types.
+// It has zero external dependencies — only stdlib context.
 package core
+
+import "context"
+
+// --- Substrate ---
+
+// Output is the result of a Sandbox command execution.
+type Output struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+
+// Sandbox is the interface for isolated command execution.
+// Exec/PutFile/GetFile/Ready cover all uses in the agent loop and workflow nodes.
+type Sandbox interface {
+	Exec(ctx context.Context, cmd string) (Output, error)
+	PutFile(ctx context.Context, path string, data []byte) error
+	GetFile(ctx context.Context, path string) ([]byte, error)
+	Ready(ctx context.Context) bool
+}
+
+// --- Metalanguagem ---
 
 // Intent is the AST produced by parsing a DSL spec file.
 type Intent struct {
-	Source    string   // file path or other identifier
-	Raw       string   // original spec content
+	Source    string
+	Raw       string
 	Steps     []Step
 	TechDebts []string
 	Repo      string
@@ -15,10 +37,10 @@ type Intent struct {
 // Step is a single semantic action extracted from a spec.
 type Step struct {
 	Kind   StepKind
-	Text   string // action text, condition, or body
-	Title  string // branch name, PR title, etc.
-	OrElse string // fallback for TRY/OR_ELSE
-	Line   int    // source line number
+	Text   string
+	Title  string
+	OrElse string
+	Line   int
 }
 
 // StepKind identifies the semantic type of a Step.

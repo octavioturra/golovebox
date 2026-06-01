@@ -10,13 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/ssh"
-
+	"github.com/user/golovebox/core"
 	"github.com/user/golovebox/internal/agent"
 	"github.com/user/golovebox/internal/config"
 	"github.com/user/golovebox/internal/llm"
 	"github.com/user/golovebox/internal/memory"
-	"github.com/user/golovebox/internal/sandbox"
 	"github.com/user/golovebox/internal/tools"
 )
 
@@ -28,16 +26,16 @@ type Handler interface {
 
 // Gateway coordinates shared resources and routes incoming tasks to the agent loop.
 type Gateway struct {
-	pool     *sandbox.Pool
+	sb       core.Sandbox
 	llm      *llm.Client
 	cfg      *config.Config
 	handlers []Handler
 	mu       sync.Mutex
 }
 
-// New creates a Gateway with shared SSH pool, LLM client, and config.
-func New(pool *sandbox.Pool, llmClient *llm.Client, cfg *config.Config) *Gateway {
-	return &Gateway{pool: pool, llm: llmClient, cfg: cfg}
+// New creates a Gateway with a sandbox, LLM client, and config.
+func New(sb core.Sandbox, llmClient *llm.Client, cfg *config.Config) *Gateway {
+	return &Gateway{sb: sb, llm: llmClient, cfg: cfg}
 }
 
 // RegisterHandler adds a handler that will be started by Run.
@@ -95,13 +93,8 @@ func (g *Gateway) RunTask(ctx context.Context, owner, repo string, issueNum int,
 		return "", fmt.Errorf("get issue: %w", err)
 	}
 
-	sc, err := g.pool.Acquire(ctx)
-	if err != nil {
-		return "", fmt.Errorf("ssh acquire: %w", err)
-	}
-
 	destPath := "/root/" + repo
-	cloneErr := tools.CloneRepo(sc, g.cfg.GitHubToken, owner, repo, destPath)
+	cloneErr := tools.CloneRepo(ctx, g.sb, g.cfg.GitHubToken, owner, repo, destPath)
 
 	var mem *memory.Memory
 	if cloneErr == nil {
@@ -110,14 +103,12 @@ func (g *Gateway) RunTask(ctx context.Context, owner, repo string, issueNum int,
 			embFn := memory.NewEmbedFnFromConfig(g.cfg.LLMProvider, g.cfg.LLMBaseURL, g.cfg.APIKey)
 			if m, newErr := memory.New(memDir, embFn); newErr == nil {
 				mem = m
-				if readme, readErr := sandbox.ReadFile(sc, destPath+"/README.md"); readErr == nil {
+				if readme, readErr := g.sb.GetFile(ctx, destPath+"/README.md"); readErr == nil {
 					_ = mem.Index(ctx, "readme", string(readme))
 				}
 			}
 		}
 	}
-
-	g.pool.Release(sc)
 
 	if cloneErr != nil {
 		return "", fmt.Errorf("clone: %w", cloneErr)
@@ -134,47 +125,30 @@ func (g *Gateway) RunTask(ctx context.Context, owner, repo string, issueNum int,
 	return loop.Run(ctx, task, progress)
 }
 
-// IsVMReady reports whether the SSH pool can be reached by attempting a
-// short-timeout dial. Returns false when the VM is still booting.
+// IsVMReady reports whether the sandbox is reachable.
 func (g *Gateway) IsVMReady() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	c, err := g.pool.Acquire(ctx)
-	if err != nil {
-		return false
-	}
-	g.pool.Release(c)
-	return true
+	return g.sb.Ready(ctx)
 }
 
-// AcquireSSH acquires an SSH client from the pool for direct use.
-// The caller must call ReleaseSSH when done.
-func (g *Gateway) AcquireSSH(ctx context.Context) (*ssh.Client, error) {
-	return g.pool.Acquire(ctx)
-}
-
-// ReleaseSSH returns an SSH client to the pool.
-func (g *Gateway) ReleaseSSH(c *ssh.Client) {
-	g.pool.Release(c)
-}
-
-// HealthCheckVM acquires a sandbox connection, runs "echo ok", and returns the output.
-// Returns an error if the pool is empty, the connection fails, or the command errors.
+// HealthCheckVM runs "echo ok" via the sandbox and returns the output.
 func (g *Gateway) HealthCheckVM(ctx context.Context) (string, error) {
-	sc, err := g.pool.Acquire(ctx)
+	out, err := g.sb.Exec(ctx, "echo ok")
 	if err != nil {
-		return "", fmt.Errorf("pool: %w", err)
+		return "", fmt.Errorf("sandbox exec: %w", err)
 	}
-	defer g.pool.Release(sc)
-	out := tools.Shell(sc, "echo ok")
-	if !strings.Contains(out, "ok") {
-		return "", fmt.Errorf("unexpected output: %q", out)
+	combined := out.Stdout
+	if out.Stderr != "" {
+		combined += "\nSTDERR: " + out.Stderr
+	}
+	if !strings.Contains(combined, "ok") {
+		return "", fmt.Errorf("unexpected output: %q", combined)
 	}
 	return "SSH echo ok", nil
 }
 
 // RunSpecTask runs the agent loop for an arbitrary task string.
-// This is the general-purpose counterpart to RunTask (which is issue-specific).
 // Pass nil for progress to run silently.
 func (g *Gateway) RunSpecTask(ctx context.Context, task string, progress agent.ProgressFunc) (string, error) {
 	var mem *memory.Memory
@@ -190,7 +164,6 @@ func (g *Gateway) RunSpecTask(ctx context.Context, task string, progress agent.P
 }
 
 // buildRegistry creates the agent tool registry for a specific owner/repo.
-// Each tool closure acquires its own SSH connection from the pool.
 func (g *Gateway) buildRegistry(owner, repo string, mem *memory.Memory) *agent.Registry {
 	r := agent.NewRegistry()
 
@@ -199,12 +172,7 @@ func (g *Gateway) buildRegistry(owner, repo string, mem *memory.Memory) *agent.R
 		Description: "Execute a shell command in the VM",
 		Parameters:  map[string]string{"cmd": "shell command to execute"},
 		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			sc, err := g.pool.Acquire(fCtx)
-			if err != nil {
-				return "", err
-			}
-			defer g.pool.Release(sc)
-			return tools.Shell(sc, params["cmd"]), nil
+			return tools.Shell(fCtx, g.sb, params["cmd"]), nil
 		},
 	})
 
@@ -213,12 +181,7 @@ func (g *Gateway) buildRegistry(owner, repo string, mem *memory.Memory) *agent.R
 		Description: "Read a file from the VM",
 		Parameters:  map[string]string{"path": "absolute path to the file"},
 		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			sc, err := g.pool.Acquire(fCtx)
-			if err != nil {
-				return "", err
-			}
-			defer g.pool.Release(sc)
-			data, err := tools.ReadFile(sc, params["path"])
+			data, err := tools.ReadFile(fCtx, g.sb, params["path"])
 			return string(data), err
 		},
 	})
@@ -228,12 +191,7 @@ func (g *Gateway) buildRegistry(owner, repo string, mem *memory.Memory) *agent.R
 		Description: "Write content to a file in the VM",
 		Parameters:  map[string]string{"path": "absolute path to the file", "content": "file content"},
 		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			sc, err := g.pool.Acquire(fCtx)
-			if err != nil {
-				return "", err
-			}
-			defer g.pool.Release(sc)
-			if err := tools.WriteFile(sc, params["path"], []byte(params["content"])); err != nil {
+			if err := tools.WriteFile(fCtx, g.sb, params["path"], []byte(params["content"])); err != nil {
 				return "", err
 			}
 			return "file written", nil
@@ -245,12 +203,7 @@ func (g *Gateway) buildRegistry(owner, repo string, mem *memory.Memory) *agent.R
 		Description: "List files in a directory in the VM",
 		Parameters:  map[string]string{"path": "absolute path to the directory"},
 		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			sc, err := g.pool.Acquire(fCtx)
-			if err != nil {
-				return "", err
-			}
-			defer g.pool.Release(sc)
-			entries, err := tools.ListDir(sc, params["path"])
+			entries, err := tools.ListDir(fCtx, g.sb, params["path"])
 			return strings.Join(entries, "\n"), err
 		},
 	})
