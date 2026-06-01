@@ -3,7 +3,7 @@
     "purpose": "Digest único de todas as fases V0 do golovebox. Substitui a leitura dos FASE_N.md individuais. Mantenha aqui apenas o que ainda informa o presente: decisões arquiteturais vivas, libs em uso, padrões enduring. Bugs já corrigidos viram aprendizado (não recipe).",
     "source_history": ".ai/fases/FASE_N.md (versionado, leitura sob demanda)",
     "digest_policy": "A cada 3-5 fases novas, releia os FASE_N.md recentes, atualize este JSON, e remova daqui o que se tornou obsoleto. Evite virar changelog — este é um mapa do estado atual.",
-    "last_digested_phase": 24,
+    "last_digested_phase": 25,
     "last_updated": "2026-06-01"
   },
 
@@ -32,7 +32,8 @@
       {"id": 21, "name": "Decomposição Modular (Design)", "delivered": "Decisão arquitetural: go.work com 7 módulos (core+5 produtos+app), regra de dependência única (só core), ordem de extração strangler fig, contratos rascunhados"},
       {"id": 22, "name": "Extração: core + promptlang",  "delivered": "go.work com 3 módulos (core, promptlang, legado). core/contracts.go: Parser+Intent/Step/StepKind, zero deps. promptlang/: DSL parser + ToIntent + core.Parser impl + parser_test.go. orchestrator consume []core.Intent. internal/dsl/ deletado."},
       {"id": 23, "name": "Extração: sandbox",            "delivered": "go.work com 4 módulos. sandbox/ implementa core.Sandbox via VM struct (pool+QEMU). Interactive interface (PTY/SFTP) para web terminal. Todos consumidores (tools, gateway, web, main, setup) migrados para core.Sandbox. internal/sandbox/ deletado. Composition root em main.go único a conhecer *sandboxpkg.VM."},
-      {"id": 24, "name": "Extração: toolskills",         "delivered": "go.work com 5 módulos. toolskills/ implementa core.Provisioner consumindo core.Sandbox por injeção (nunca importa sandbox concreto). CompleteFn injetada no Generator (sem dependency em internal/llm). 4 testes com mock sandbox isolado. internal/skills/ deletado."}
+      {"id": 24, "name": "Extração: toolskills",         "delivered": "go.work com 5 módulos. toolskills/ implementa core.Provisioner consumindo core.Sandbox por injeção (nunca importa sandbox concreto). CompleteFn injetada no Generator (sem dependency em internal/llm). 4 testes com mock sandbox isolado. internal/skills/ deletado."},
+      {"id": 25, "name": "Extração: derivator",          "delivered": "go.work com 6 módulos. derivator/ implementa core.Deriver (seed → PromptGraph priorizado), consome core.Completer por injeção. core.Completer promovido (2º consumidor: toolskills.Generate). llm.NewCompleter adapta *llm.Client. 4 testes isolados no derivator."}
     ],
     "v1_planned": [
       {"id": "v1_fase1", "name": "CLI Delegation",     "scope": "CodingAgent interface (Claude Code/Codex/Gemini adapters), delegate_code + verify_implementation tools, .ai/ convention, VM cloud-init instala CLI configurado"},
@@ -54,7 +55,8 @@
       "go_workspace_modular": "go.work na raiz amarra módulos locais sem publicar. Cada produto tem go.mod próprio. Regra: setas só apontam para core ou camada inferior; app importa todos. Extração strangler fig — um módulo por fase. replace no go.mod necessário mesmo com go.work (Go 1.26 ainda tenta resolver v0.0.0-xxx via rede sem ele). 4 módulos após FASE 23: core, promptlang, sandbox, app. FASE 21/22/23.",
       "core_intent_semantic": "core.Intent usa Steps []Step com StepKind (modelo semântico) em vez de Annotations []Annotation (espelho sintático do DSL). Motivo: orchestrator.enforceWorkflowOrdering toma decisões por tipo de step — StepKind torna isso explícito e testável. Parser separa representação sintática (ParsedSpec) da semântica (Intent). FASE 22.",
       "sandbox_abstraction": "core.Sandbox (Exec/PutFile/GetFile/Ready) é o contrato de agente para acesso à VM. sandbox.Interactive (OpenPTY/OpenSFTP) é interface separada para web terminal — substrato, não domínio. *sandbox.VM implementa ambas. Composition root (main.go) é o único lugar que conhece o tipo concreto. sandbox.Config desacoplada de config.Config — conversão no composition root. FASE 23.",
-      "inject_dont_import": "Módulos extraídos recebem dependências por injeção — nunca importam o concreto de outro módulo produto. toolskills recebe core.Sandbox (não sandbox.VM). Generator recebe CompleteFn (não *llm.Client). Padrão: se o contrato não existe no core ainda e há um único consumidor, func injetada > interface especulativa. FASE 24."
+      "inject_dont_import": "Módulos extraídos recebem dependências por injeção — nunca importam o concreto de outro módulo produto. toolskills recebe core.Sandbox (não sandbox.VM). Generator recebe core.Completer (não *llm.Client). derivator recebe core.Completer (não *llm.Client). Padrão: func injetada se 1 consumidor; promove para interface core se 2+ consumidores. FASE 24/25.",
+      "completer_promotion": "core.Completer (Complete(ctx, prompt) string) promovido de CompleteFn quando derivator se tornou o 2º consumidor. llm.NewCompleter adapta *llm.Client para core.Completer no composition root. Contrato mínimo — não vaza []Message, model, HTTP. FASE 25."
     },
     "backend": {
       "router": "chi v5 — sub-routers por domínio, middleware.Recoverer, chi.URLParam. Substituiu http.ServeMux na FASE 11.",
