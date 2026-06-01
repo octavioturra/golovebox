@@ -24,8 +24,8 @@ import (
 	"github.com/user/golovebox/internal/llm"
 	"github.com/user/golovebox/internal/orchestrator"
 	sandboxpkg "github.com/user/golovebox/sandbox"
+	"github.com/user/golovebox/toolskills"
 	"github.com/user/golovebox/internal/setup"
-	"github.com/user/golovebox/internal/skills"
 	"github.com/user/golovebox/internal/web"
 )
 
@@ -446,7 +446,7 @@ func newWebCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			reg, err := skills.NewRegistry(skillsDir)
+			reg, err := toolskills.NewRegistry(skillsDir)
 			if err != nil {
 				return err
 			}
@@ -535,7 +535,7 @@ func newSkillCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			reg, err := skills.NewRegistry(skillsDir)
+			reg, err := toolskills.NewRegistry(skillsDir)
 			if err != nil {
 				return err
 			}
@@ -569,7 +569,10 @@ func newSkillCmd() *cobra.Command {
 				APIKey:  cfg.APIKey,
 				Model:   cfg.LLMModel,
 			})
-			sk, err := skills.Generate(cmd.Context(), llmClient, args[0], skillsDir)
+			completeFn := func(ctx context.Context, prompt string) (string, error) {
+				return llmClient.Complete(ctx, []llm.Message{{Role: "user", Content: prompt}})
+			}
+			sk, err := toolskills.Generate(cmd.Context(), completeFn, args[0], skillsDir)
 			if err != nil {
 				return err
 			}

@@ -5,4 +5,5 @@ use (
 	./core
 	./promptlang
 	./sandbox
+	./toolskills
 )

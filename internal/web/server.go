@@ -27,7 +27,7 @@ import (
 	"github.com/user/golovebox/internal/llm"
 	"github.com/user/golovebox/internal/orchestrator"
 	sandboxpkg "github.com/user/golovebox/sandbox"
-	"github.com/user/golovebox/internal/skills"
+	"github.com/user/golovebox/toolskills"
 	"github.com/user/golovebox/internal/tools"
 )
 
@@ -46,7 +46,7 @@ type Server struct {
 	interactive     *sandboxpkg.VM
 	orch            *orchestrator.Orchestrator
 	checkpoint      *dag.CheckpointManager
-	skillsReg       *skills.Registry
+	skillsReg       *toolskills.Registry
 	llmClient       *llm.Client
 	store           *RunStore
 	cfg             *config.Config
@@ -58,7 +58,7 @@ type Server struct {
 }
 
 // New creates the Server wiring all components together.
-func New(gw *gateway.Gateway, vm *sandboxpkg.VM, orch *orchestrator.Orchestrator, cm *dag.CheckpointManager, reg *skills.Registry, llmClient *llm.Client, cfg *config.Config, runsDir string) (*Server, error) {
+func New(gw *gateway.Gateway, vm *sandboxpkg.VM, orch *orchestrator.Orchestrator, cm *dag.CheckpointManager, reg *toolskills.Registry, llmClient *llm.Client, cfg *config.Config, runsDir string) (*Server, error) {
 	store, err := NewRunStore(runsDir)
 	if err != nil {
 		return nil, err
@@ -452,7 +452,7 @@ func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListSkills(w http.ResponseWriter, _ *http.Request) {
 	list := s.skillsReg.List()
 	if list == nil {
-		list = []*skills.Skill{}
+		list = []*toolskills.Skill{}
 	}
 	writeJSON(w, list)
 }
@@ -470,7 +470,10 @@ func (s *Server) handleGenerateSkill(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	sk, err := skills.Generate(r.Context(), s.llmClient, body.Description, skillsDir)
+	completeFn := func(ctx context.Context, prompt string) (string, error) {
+		return s.llmClient.Complete(ctx, []llm.Message{{Role: "user", Content: prompt}})
+	}
+	sk, err := toolskills.Generate(r.Context(), completeFn, body.Description, skillsDir)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

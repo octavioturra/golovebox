@@ -63,3 +63,18 @@ const (
 type Parser interface {
 	Parse(src string) (Intent, error)
 }
+
+// --- Skills ---
+
+// SkillMeta is the frontmatter metadata of a skill file (.golovebox/skills/<x>.md).
+type SkillMeta struct {
+	Name        string
+	Description string
+	Tools       []string
+	Provision   []string // shell commands to run in the VM to set up the skill
+}
+
+// Provisioner prepares the substrate for a skill by running its Provision commands.
+type Provisioner interface {
+	Provision(ctx context.Context, skill SkillMeta) error
+}

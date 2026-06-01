@@ -1,4 +1,4 @@
-package skills
+package toolskills
 
 import (
 	"context"
@@ -7,13 +7,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/user/golovebox/internal/llm"
 )
+
+// CompleteFn is a function that sends a prompt to an LLM and returns the reply.
+// Callers inject this to avoid a direct dependency on internal/llm.
+type CompleteFn func(ctx context.Context, prompt string) (string, error)
 
 // Generate asks the LLM to create a new skill file from a plain-language description,
 // saves it in dir, and returns the parsed Skill.
-func Generate(ctx context.Context, llmClient *llm.Client, description, dir string) (*Skill, error) {
+func Generate(ctx context.Context, complete CompleteFn, description, dir string) (*Skill, error) {
 	prompt := fmt.Sprintf(`Generate a golovebox skill file for the following purpose:
 "%s"
 
@@ -33,12 +35,11 @@ Detailed prompt instructions for the agent...
 - Example 2
 `, description)
 
-	reply, err := llmClient.Complete(ctx, []llm.Message{{Role: "user", Content: prompt}})
+	reply, err := complete(ctx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("skills: generate: %w", err)
 	}
 
-	// Strip accidental outer code fences if the LLM wrapped the output.
 	content := strings.TrimSpace(reply)
 	content = strings.TrimPrefix(content, "```markdown")
 	content = strings.TrimPrefix(content, "```md")
@@ -46,12 +47,10 @@ Detailed prompt instructions for the agent...
 	content = strings.TrimSuffix(content, "```")
 	content = strings.TrimSpace(content)
 
-	// Ensure content starts with frontmatter.
 	if !strings.HasPrefix(content, "---") {
 		return nil, fmt.Errorf("skills: generate: LLM did not produce valid frontmatter (got: %.100s)", content)
 	}
 
-	// Write to a temporary parse target to extract name.
 	tmp, err := os.CreateTemp("", "skill-*.md")
 	if err != nil {
 		return nil, fmt.Errorf("skills: generate: temp file: %w", err)
@@ -73,7 +72,6 @@ Detailed prompt instructions for the agent...
 		return nil, fmt.Errorf("skills: generate: LLM produced skill with empty name")
 	}
 
-	// Sanitise name for use as filename.
 	safeName := sanitiseName(s.Name)
 	destPath := filepath.Join(dir, safeName+".md")
 	if err := os.WriteFile(destPath, []byte(content), 0o644); err != nil {
