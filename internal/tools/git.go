@@ -8,110 +8,97 @@ import (
 
 	gogithub "github.com/google/go-github/v60/github"
 	"github.com/google/uuid"
-	"golang.org/x/crypto/ssh"
 
+	"github.com/user/golovebox/core"
 	"github.com/user/golovebox/internal/dag"
-	"github.com/user/golovebox/internal/sandbox"
 )
 
 const gitTimeout = 120 * time.Second
 
 // SyncRepo clones or pulls the repo at clonePath on the VM.
 // Returns dag.ErrNeedsHuman (wrapped) on merge conflict.
-func SyncRepo(ctx context.Context, client *ssh.Client, token, defaultRepo, clonePath, defaultBranch string) (string, error) {
+func SyncRepo(ctx context.Context, sb core.Sandbox, token, defaultRepo, clonePath, defaultBranch string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 
-	askpassPath, cleanup, err := writeAskpass(client, token)
+	askpassPath, cleanup, err := writeAskpass(ctx, sb, token)
 	if err != nil {
 		return "", fmt.Errorf("sync_repo askpass: %w", err)
 	}
 	defer cleanup()
 
-	// Persist credentials so the agent's bare `git push` (issued via the shell
-	// tool, outside ExecPush) authenticates without GIT_ASKPASS.
-	_ = writeGitCredentials(client, token)
+	// Persist credentials so the agent's bare `git push` authenticates.
+	_ = writeGitCredentials(ctx, sb, token)
 
-	// Check if repo already cloned.
 	checkCmd := fmt.Sprintf("test -d %s/.git && echo exists || echo missing", clonePath)
-	existsOut, _, _ := sandbox.Exec(client, checkCmd)
+	o, _ := sb.Exec(ctx, checkCmd)
 
-	if strings.TrimSpace(existsOut) == "missing" {
-		// Ensure parent dir exists so `git clone` doesn't fail with ENOENT
-		// (e.g. clonePath=/root/octavioturra/octavioturra needs /root/octavioturra).
+	if strings.TrimSpace(o.Stdout) == "missing" {
 		mkdirCmd := fmt.Sprintf("mkdir -p $(dirname %s)", clonePath)
-		_, _, _ = sandbox.Exec(client, mkdirCmd)
+		_, _ = sb.Exec(ctx, mkdirCmd)
 
 		cloneCmd := fmt.Sprintf(
 			"GIT_ASKPASS=%s GIT_USERNAME=x-token git clone https://github.com/%s %s 2>&1",
 			askpassPath, defaultRepo, clonePath,
 		)
-		out, _, cloneErr := sandbox.Exec(client, cloneCmd)
+		o2, cloneErr := sb.Exec(ctx, cloneCmd)
 		if cloneErr != nil {
-			return out, fmt.Errorf("git clone: %w", cloneErr)
+			return o2.Stdout, fmt.Errorf("git clone: %w", cloneErr)
 		}
-		return out, nil
+		return o2.Stdout, nil
 	}
 
-	// Pull from remote.
 	pullCmd := fmt.Sprintf(
 		"cd %s && GIT_ASKPASS=%s GIT_USERNAME=x-token git pull origin %s 2>&1",
 		clonePath, askpassPath, defaultBranch,
 	)
-	out, _, pullErr := sandbox.Exec(client, pullCmd)
-	if pullErr != nil || isGitConflict(out) {
-		return out, fmt.Errorf("merge conflict in %s: %w", defaultRepo, dag.ErrNeedsHuman)
+	o3, pullErr := sb.Exec(ctx, pullCmd)
+	if pullErr != nil || isGitConflict(o3.Stdout) {
+		return o3.Stdout, fmt.Errorf("merge conflict in %s: %w", defaultRepo, dag.ErrNeedsHuman)
 	}
-	return out, nil
+	return o3.Stdout, nil
 }
 
 // ExecBranch creates or checks out branchName in clonePath on the VM.
-func ExecBranch(client *ssh.Client, clonePath, branchName string) (string, error) {
-	cmd := fmt.Sprintf("cd %s && git checkout -b %s 2>&1", clonePath, branchName)
-	out, _, err := sandbox.Exec(client, cmd)
+func ExecBranch(ctx context.Context, sb core.Sandbox, clonePath, branchName string) (string, error) {
+	o, err := sb.Exec(ctx, fmt.Sprintf("cd %s && git checkout -b %s 2>&1", clonePath, branchName))
 	if err != nil {
-		// Branch already exists — just switch to it.
-		if strings.Contains(out, "already exists") || strings.Contains(out, "already exists") {
-			switchCmd := fmt.Sprintf("cd %s && git checkout %s 2>&1", clonePath, branchName)
-			out2, _, err2 := sandbox.Exec(client, switchCmd)
-			return out2, err2
+		if strings.Contains(o.Stdout, "already exists") {
+			o2, err2 := sb.Exec(ctx, fmt.Sprintf("cd %s && git checkout %s 2>&1", clonePath, branchName))
+			return o2.Stdout, err2
 		}
-		return out, err
+		return o.Stdout, err
 	}
-	return out, nil
+	return o.Stdout, nil
 }
 
 // ExecPush pushes the current branch to origin with --set-upstream.
-func ExecPush(client *ssh.Client, token, clonePath, branch string) (string, error) {
-	askpassPath, cleanup, err := writeAskpass(client, token)
+func ExecPush(ctx context.Context, sb core.Sandbox, token, clonePath, branch string) (string, error) {
+	askpassPath, cleanup, err := writeAskpass(ctx, sb, token)
 	if err != nil {
 		return "", fmt.Errorf("push askpass: %w", err)
 	}
 	defer cleanup()
 
 	if branch == "" {
-		// Detect current branch.
-		b, _, _ := sandbox.Exec(client, fmt.Sprintf("cd %s && git branch --show-current", clonePath))
-		branch = strings.TrimSpace(b)
+		o, _ := sb.Exec(ctx, fmt.Sprintf("cd %s && git branch --show-current", clonePath))
+		branch = strings.TrimSpace(o.Stdout)
 	}
 
-	cmd := fmt.Sprintf(
+	o, pushErr := sb.Exec(ctx, fmt.Sprintf(
 		"cd %s && GIT_ASKPASS=%s GIT_USERNAME=x-token git push --set-upstream origin %s 2>&1",
 		clonePath, askpassPath, branch,
-	)
-	out, _, pushErr := sandbox.Exec(client, cmd)
+	))
 	if pushErr != nil {
-		return out, fmt.Errorf("git push: %w\n%s", pushErr, dag.ErrNeedsHuman)
+		return o.Stdout, fmt.Errorf("git push: %w\n%s", pushErr, dag.ErrNeedsHuman)
 	}
-	return out, nil
+	return o.Stdout, nil
 }
 
 // ExecPR creates or updates a GitHub PR for the given branch.
-// Returns the PR URL on success.
 func ExecPR(ctx context.Context, token, owner, repo, head, base, titleParam, body string) (string, error) {
 	client := gogithub.NewClient(nil).WithAuthToken(token)
 
-	// Check for existing open PR on this branch.
 	prs, _, err := client.PullRequests.List(ctx, owner, repo, &gogithub.PullRequestListOptions{
 		State: "open",
 		Head:  owner + ":" + head,
@@ -136,7 +123,6 @@ func ExecPR(ctx context.Context, token, owner, repo, head, base, titleParam, bod
 	return fmt.Sprintf("PR #%d criado: %s", pr.GetNumber(), pr.GetHTMLURL()), nil
 }
 
-// isGitConflict reports whether git output indicates a merge conflict.
 func isGitConflict(output string) bool {
 	for _, marker := range []string{"CONFLICT", "Automatic merge failed", "<<<<<<"} {
 		if strings.Contains(output, marker) {
@@ -146,36 +132,28 @@ func isGitConflict(output string) bool {
 	return false
 }
 
-// writeGitCredentials persists ~/.git-credentials with the GitHub token so that
-// subsequent `git push/pull/fetch` calls (issued via the agent shell tool, not
-// only via ExecPush/SyncRepo) authenticate via the `credential.helper = store`
-// configured in cloud-init. Idempotent: overwrites on every call.
-func writeGitCredentials(client *ssh.Client, token string) error {
+func writeGitCredentials(ctx context.Context, sb core.Sandbox, token string) error {
 	if token == "" {
 		return nil
 	}
 	line := fmt.Sprintf("https://x-token:%s@github.com\n", token)
-	if err := sandbox.WriteFile(client, "/root/.git-credentials", []byte(line)); err != nil {
+	if err := sb.PutFile(ctx, "/root/.git-credentials", []byte(line)); err != nil {
 		return fmt.Errorf("write git-credentials: %w", err)
 	}
-	if _, _, err := sandbox.Exec(client, "chmod 600 /root/.git-credentials"); err != nil {
-		return fmt.Errorf("chmod git-credentials: %w", err)
-	}
+	_, _ = sb.Exec(ctx, "chmod 600 /root/.git-credentials")
 	return nil
 }
 
-// writeAskpass writes a GIT_ASKPASS helper script to the VM and returns its path
-// plus a cleanup function that removes the file.
-func writeAskpass(client *ssh.Client, token string) (path string, cleanup func(), err error) {
+func writeAskpass(ctx context.Context, sb core.Sandbox, token string) (path string, cleanup func(), err error) {
 	path = fmt.Sprintf("/tmp/.glb_askpass_%s.sh", uuid.New().String())
 	safeToken := strings.ReplaceAll(token, "'", `'\''`)
 	script := fmt.Sprintf("#!/bin/sh\necho '%s'\n", safeToken)
-	if err = sandbox.WriteFile(client, path, []byte(script)); err != nil {
+	if err = sb.PutFile(ctx, path, []byte(script)); err != nil {
 		return "", nil, err
 	}
-	if _, _, err = sandbox.Exec(client, "chmod +x "+path); err != nil {
-		return "", nil, err
+	if _, execErr := sb.Exec(ctx, "chmod +x "+path); execErr != nil {
+		return "", nil, execErr
 	}
-	cleanup = func() { _, _, _ = sandbox.Exec(client, "rm -f "+path) }
+	cleanup = func() { _, _ = sb.Exec(context.Background(), "rm -f "+path) }
 	return path, cleanup, nil
 }

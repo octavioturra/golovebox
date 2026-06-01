@@ -13,8 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/pkg/sftp"
-	"golang.org/x/crypto/ssh"
+	sandboxpkg "github.com/user/golovebox/sandbox"
 )
 
 var wsUpgrader = websocket.Upgrader{
@@ -50,67 +49,32 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Retry SSH dial up to 3× with 500ms backoff — handles stale pool connections
-	// and race between browser connect and VM finishing boot.
-	var sshConn *ssh.Client
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// Retry PTY open up to 3× with 500ms backoff.
+	var pty *sandboxpkg.PTY
+	var ptyErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		sshConn, err = s.gw.AcquireSSH(r.Context())
-		if err == nil {
+		pty, ptyErr = s.interactive.OpenPTY(ctx, 80, 24)
+		if ptyErr == nil {
 			break
 		}
 		if attempt < 3 {
 			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 		}
 	}
-	if err != nil {
+	if ptyErr != nil {
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("erro: VM não disponível\r\n"))
 		return
 	}
-	defer s.gw.ReleaseSSH(sshConn)
-
-	session, err := sshConn.NewSession()
-	if err != nil {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("erro: %v\r\n", err)))
-		return
-	}
-	defer session.Close()
-
-	modes := ssh.TerminalModes{
-		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 14400,
-		ssh.TTY_OP_OSPEED: 14400,
-	}
-	if err := session.RequestPty("xterm-256color", 24, 80, modes); err != nil {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("erro pty: %v\r\n", err)))
-		return
-	}
-
-	stdin, err := session.StdinPipe()
-	if err != nil {
-		return
-	}
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		return
-	}
-	stderr, err := session.StderrPipe()
-	if err != nil {
-		return
-	}
-
-	if err := session.Start("/bin/sh"); err != nil {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("erro shell: %v\r\n", err)))
-		return
-	}
-
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
+	defer pty.Close()
 
 	// SSH stdout → WebSocket
 	go func() {
 		buf := make([]byte, 4096)
 		for {
-			n, err := stdout.Read(buf)
+			n, err := pty.Read(buf)
 			if n > 0 {
 				if werr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
 					cancel()
@@ -128,7 +92,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		buf := make([]byte, 4096)
 		for {
-			n, err := stderr.Read(buf)
+			n, err := pty.ReadStderr(buf)
 			if n > 0 {
 				_ = conn.WriteMessage(websocket.BinaryMessage, buf[:n])
 			}
@@ -141,8 +105,8 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	// WebSocket → SSH stdin (+ resize messages)
 	type resizeMsg struct {
 		Type string `json:"type"`
-		Cols uint32 `json:"cols"`
-		Rows uint32 `json:"rows"`
+		Cols int    `json:"cols"`
+		Rows int    `json:"rows"`
 	}
 	for {
 		select {
@@ -158,11 +122,11 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 
 		var rm resizeMsg
 		if json.Unmarshal(msg, &rm) == nil && rm.Type == "resize" {
-			_ = session.WindowChange(int(rm.Rows), int(rm.Cols))
+			_ = pty.WindowChange(rm.Rows, rm.Cols)
 			continue
 		}
 
-		if _, err := stdin.Write(msg); err != nil {
+		if err := pty.Write(msg); err != nil {
 			return
 		}
 	}
@@ -181,21 +145,14 @@ func (s *Server) handleVMFiles(w http.ResponseWriter, r *http.Request) {
 		path = "/root"
 	}
 
-	sshConn, err := s.gw.AcquireSSH(r.Context())
+	sftpConn, err := s.interactive.OpenSFTP(r.Context())
 	if err != nil {
 		http.Error(w, "vm unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	defer s.gw.ReleaseSSH(sshConn)
+	defer sftpConn.Close()
 
-	client, err := sftp.NewClient(sshConn)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer client.Close()
-
-	infos, err := client.ReadDir(path)
+	infos, err := sftpConn.ReadDir(path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -230,21 +187,14 @@ func (s *Server) handleVMFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sshConn, err := s.gw.AcquireSSH(r.Context())
+	sftpConn, err := s.interactive.OpenSFTP(r.Context())
 	if err != nil {
 		http.Error(w, "vm unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	defer s.gw.ReleaseSSH(sshConn)
+	defer sftpConn.Close()
 
-	client, err := sftp.NewClient(sshConn)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer client.Close()
-
-	f, err := client.Open(path)
+	f, err := sftpConn.Open(path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return

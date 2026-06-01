@@ -10,13 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/ssh"
-
 	"github.com/spf13/cobra"
 	embedassets "github.com/user/golovebox/internal/embed"
 
 	"github.com/user/golovebox/internal/config"
-	"github.com/user/golovebox/internal/sandbox"
+	sandboxpkg "github.com/user/golovebox/sandbox"
 )
 
 func NewInitCmd() *cobra.Command {
@@ -210,23 +208,36 @@ func step7SmokeTest(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	sshKeyPath := filepath.Join(vmDir, "id_rsa")
+	qemuDir, err := cfg.QEMUDir()
+	if err != nil {
+		return err
+	}
+	sbCfg := sandboxpkg.Config{
+		QEMUExe: cfg.QEMUPath,
+		QEMUDir: qemuDir,
+		VMDir:   vmDir,
+		SSHPort: cfg.SSHPort,
+		QMPPort: cfg.QMPPort,
+	}
 
 	// Cloud-init takes longer than QMP — give QEMU plenty of time to bind QMP.
-	sandbox.StartTimeout = 60 * time.Second
-	mgr, err := sandbox.Start(*cfg)
+	sandboxpkg.StartTimeout = 60 * time.Second
+	mgr, err := sandboxpkg.Start(sbCfg)
 	if err != nil {
 		return fmt.Errorf("start VM: %w", err)
 	}
 	defer mgr.Stop() //nolint:errcheck
 
+	sshKeyPath := filepath.Join(vmDir, "id_rsa")
+
 	// Poll SSH for up to 5 minutes — cloud-init needs to install packages
 	// and start sshd on the first boot.
 	deadline := time.Now().Add(5 * time.Minute)
-	var client *ssh.Client
+	var run func(string) (string, string, error)
+	var closeSSH func() error
 	var lastErr error
 	for time.Now().Before(deadline) {
-		client, lastErr = sandbox.Dial("127.0.0.1", fmt.Sprintf("%d", cfg.SSHPort), "root", sshKeyPath)
+		run, closeSSH, lastErr = sandboxpkg.DirectDial("127.0.0.1", cfg.SSHPort, "root", sshKeyPath)
 		if lastErr == nil {
 			break
 		}
@@ -238,12 +249,12 @@ func step7SmokeTest(ctx context.Context, cfg *config.Config) error {
 		fmt.Print(".")
 	}
 	fmt.Println()
-	if client == nil {
+	if run == nil {
 		return fmt.Errorf("ssh dial timed out after 5 min: %w", lastErr)
 	}
-	defer client.Close()
+	defer closeSSH() //nolint:errcheck
 
-	stdout, _, err := sandbox.Exec(client, "echo ok")
+	stdout, _, err := run("echo ok")
 	if err != nil {
 		return fmt.Errorf("echo test: %w", err)
 	}

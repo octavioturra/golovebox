@@ -1,5 +1,5 @@
-// Package skills manages reusable agent skill definitions stored as Markdown files.
-package skills
+// Package toolskills manages reusable agent skill definitions stored as Markdown files.
+package toolskills
 
 import (
 	"fmt"
@@ -9,16 +9,16 @@ import (
 	"sync"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/user/golovebox/core"
 )
 
-// Skill describes a reusable agent behaviour loaded from a .md file.
+// Skill extends core.SkillMeta with runtime fields (prompt body, file path).
 type Skill struct {
-	Name        string   `toml:"name"`
-	Description string   `toml:"description"`
-	Tools       []string `toml:"tools"`
-	Examples    []string `toml:"examples"`
-	Prompt      string   `toml:"-"` // body after the closing ---
-	FilePath    string   `toml:"-"`
+	core.SkillMeta
+	Examples []string `toml:"examples"`
+	Prompt   string   `toml:"-"`
+	FilePath string   `toml:"-"`
 }
 
 // Registry holds all skills loaded from a directory on disk.
@@ -106,14 +106,13 @@ func parseSkillFile(path string) (*Skill, error) {
 	}
 	content := string(data)
 
-	// Expect: ---\n<TOML>\n---\n<prompt>
 	const delim = "---"
 	if !strings.HasPrefix(strings.TrimSpace(content), delim) {
 		return nil, fmt.Errorf("no frontmatter in %s", path)
 	}
 
-	parts := strings.SplitN(content, delim, 3)
 	// parts[0] = "" (before first ---), parts[1] = TOML, parts[2] = prompt body
+	parts := strings.SplitN(content, delim, 3)
 	if len(parts) < 3 {
 		return nil, fmt.Errorf("incomplete frontmatter in %s", path)
 	}

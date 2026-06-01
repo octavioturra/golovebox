@@ -1,37 +1,31 @@
 package tools
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
-	"github.com/pkg/sftp"
-	"golang.org/x/crypto/ssh"
-
-	"github.com/user/golovebox/internal/sandbox"
+	"github.com/user/golovebox/core"
 )
 
-func ReadFile(client *ssh.Client, remotePath string) ([]byte, error) {
-	return sandbox.ReadFile(client, remotePath)
+func ReadFile(ctx context.Context, sb core.Sandbox, remotePath string) ([]byte, error) {
+	return sb.GetFile(ctx, remotePath)
 }
 
-func WriteFile(client *ssh.Client, remotePath string, data []byte) error {
-	return sandbox.WriteFile(client, remotePath, data)
+func WriteFile(ctx context.Context, sb core.Sandbox, remotePath string, data []byte) error {
+	return sb.PutFile(ctx, remotePath, data)
 }
 
-func ListDir(client *ssh.Client, remotePath string) ([]string, error) {
-	sc, err := sftp.NewClient(client)
-	if err != nil {
-		return nil, fmt.Errorf("sftp client: %w", err)
-	}
-	defer sc.Close()
-
-	entries, err := sc.ReadDir(remotePath)
+func ListDir(ctx context.Context, sb core.Sandbox, remotePath string) ([]string, error) {
+	o, err := sb.Exec(ctx, "ls -1 "+remotePath)
 	if err != nil {
 		return nil, fmt.Errorf("list dir %s: %w", remotePath, err)
 	}
-
-	names := make([]string, len(entries))
-	for i, e := range entries {
-		names[i] = e.Name()
+	var entries []string
+	for _, line := range strings.Split(strings.TrimSpace(o.Stdout), "\n") {
+		if line != "" {
+			entries = append(entries, line)
+		}
 	}
-	return names, nil
+	return entries, nil
 }

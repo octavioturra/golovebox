@@ -4,4 +4,7 @@ use (
 	.
 	./core
 	./promptlang
+	./sandbox
+	./toolskills
+	./derivator
 )

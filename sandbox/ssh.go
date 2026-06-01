@@ -28,7 +28,7 @@ func Dial(host, port, user, keyPath string) (*ssh.Client, error) {
 	return ssh.Dial("tcp", net.JoinHostPort(host, port), cfg)
 }
 
-func Exec(client *ssh.Client, cmd string) (stdout, stderr string, err error) {
+func runCmd(client *ssh.Client, cmd string) (stdout, stderr string, err error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return "", "", fmt.Errorf("new session: %w", err)
@@ -41,7 +41,7 @@ func Exec(client *ssh.Client, cmd string) (stdout, stderr string, err error) {
 	return outBuf.String(), errBuf.String(), err
 }
 
-func ReadFile(client *ssh.Client, remotePath string) ([]byte, error) {
+func readFile(client *ssh.Client, remotePath string) ([]byte, error) {
 	sc, err := sftp.NewClient(client)
 	if err != nil {
 		return nil, fmt.Errorf("sftp client: %w", err)
@@ -55,7 +55,7 @@ func ReadFile(client *ssh.Client, remotePath string) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
-func WriteFile(client *ssh.Client, remotePath string, data []byte) error {
+func writeFile(client *ssh.Client, remotePath string, data []byte) error {
 	sc, err := sftp.NewClient(client)
 	if err != nil {
 		return fmt.Errorf("sftp client: %w", err)

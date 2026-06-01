@@ -7,9 +7,8 @@ import (
 
 	gogithub "github.com/google/go-github/v60/github"
 	"github.com/google/uuid"
-	"golang.org/x/crypto/ssh"
 
-	"github.com/user/golovebox/internal/sandbox"
+	"github.com/user/golovebox/core"
 )
 
 func ListIssues(ctx context.Context, token, owner, repo string) ([]*gogithub.Issue, error) {
@@ -26,34 +25,30 @@ func GetIssue(ctx context.Context, token, owner, repo string, number int) (*gogi
 	return issue, err
 }
 
-// CloneRepo clones a GitHub repository into the VM via SSH.
+// CloneRepo clones a GitHub repository into the VM.
 // Uses GIT_ASKPASS so the token never appears in git log or ps output.
-func CloneRepo(sshClient *ssh.Client, token, owner, repo, destPath string) error {
+func CloneRepo(ctx context.Context, sb core.Sandbox, token, owner, repo, destPath string) error {
 	askpassPath := fmt.Sprintf("/tmp/.golovebox_askpass_%s.sh", uuid.New().String())
-	// Single-quote the token; replace any embedded single-quotes with '\''.
-	safeToken := strings.ReplaceAll(token, "'", "'\\''")
+	safeToken := strings.ReplaceAll(token, "'", `'\''`)
 	script := fmt.Sprintf("#!/bin/sh\necho '%s'\n", safeToken)
 
-	if err := sandbox.WriteFile(sshClient, askpassPath, []byte(script)); err != nil {
+	if err := sb.PutFile(ctx, askpassPath, []byte(script)); err != nil {
 		return fmt.Errorf("write askpass: %w", err)
 	}
-	if _, _, err := sandbox.Exec(sshClient, "chmod +x "+askpassPath); err != nil {
+	if _, err := sb.Exec(ctx, "chmod +x "+askpassPath); err != nil {
 		return fmt.Errorf("chmod askpass: %w", err)
 	}
-	defer func() {
-		_, _, _ = sandbox.Exec(sshClient, "rm -f "+askpassPath)
-	}()
+	defer func() { _, _ = sb.Exec(context.Background(), "rm -f "+askpassPath) }()
 
 	cloneURL := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
 	cloneCmd := fmt.Sprintf("GIT_ASKPASS=%s GIT_USERNAME=x-token git clone %s %s",
 		askpassPath, cloneURL, destPath)
 
-	_, stderr, err := sandbox.Exec(sshClient, cloneCmd)
+	o, err := sb.Exec(ctx, cloneCmd)
 	if err != nil {
-		return fmt.Errorf("git clone: %w: %s", err, stderr)
+		return fmt.Errorf("git clone: %w: %s", err, o.Stderr)
 	}
-	// Persist credentials so later `git push/pull` from the agent shell works.
-	_ = writeGitCredentials(sshClient, token)
+	_ = writeGitCredentials(ctx, sb, token)
 	return nil
 }
 

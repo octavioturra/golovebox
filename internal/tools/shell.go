@@ -1,34 +1,33 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
-	"golang.org/x/crypto/ssh"
-
-	"github.com/user/golovebox/internal/sandbox"
+	"github.com/user/golovebox/core"
 )
 
-// Shell executes cmd in the VM via SSH and returns combined output.
+// Shell executes cmd in the VM via the sandbox and returns combined output.
 // Non-zero exit codes are surfaced in the returned string rather than as errors,
 // so the agent loop always receives the full command output as its observation.
-func Shell(client *ssh.Client, cmd string) string {
-	stdout, stderr, execErr := sandbox.Exec(client, cmd)
-	var sb strings.Builder
-	if stdout != "" {
-		sb.WriteString(stdout)
+func Shell(ctx context.Context, sb core.Sandbox, cmd string) string {
+	o, execErr := sb.Exec(ctx, cmd)
+	var sb2 strings.Builder
+	if o.Stdout != "" {
+		sb2.WriteString(o.Stdout)
 	}
-	if stderr != "" {
-		if sb.Len() > 0 {
-			sb.WriteString("\n")
+	if o.Stderr != "" {
+		if sb2.Len() > 0 {
+			sb2.WriteString("\n")
 		}
-		sb.WriteString("STDERR: " + stderr)
+		sb2.WriteString("STDERR: " + o.Stderr)
 	}
 	if execErr != nil {
-		if sb.Len() > 0 {
-			sb.WriteString("\n")
+		if sb2.Len() > 0 {
+			sb2.WriteString("\n")
 		}
-		sb.WriteString(fmt.Sprintf("Exit error: %v", execErr))
+		sb2.WriteString(fmt.Sprintf("Exit error: %v", execErr))
 	}
-	return sb.String()
+	return sb2.String()
 }
