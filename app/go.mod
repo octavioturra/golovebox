@@ -1,4 +1,4 @@
-module github.com/user/golovebox
+module github.com/user/golovebox/app
 
 go 1.26
 
@@ -34,10 +34,10 @@ require (
 )
 
 replace (
-	github.com/user/golovebox/core => ./core
-	github.com/user/golovebox/promptlang => ./promptlang
-	github.com/user/golovebox/sandbox => ./sandbox
-	github.com/user/golovebox/toolskills => ./toolskills
-	github.com/user/golovebox/derivator => ./derivator
-	github.com/user/golovebox/orchestrator => ./orchestrator
+	github.com/user/golovebox/core => ../core
+	github.com/user/golovebox/promptlang => ../promptlang
+	github.com/user/golovebox/sandbox => ../sandbox
+	github.com/user/golovebox/toolskills => ../toolskills
+	github.com/user/golovebox/derivator => ../derivator
+	github.com/user/golovebox/orchestrator => ../orchestrator
 )

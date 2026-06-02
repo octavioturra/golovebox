@@ -17,17 +17,17 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/user/golovebox/core"
-	"github.com/user/golovebox/internal/config"
-	"github.com/user/golovebox/internal/gateway"
+	"github.com/user/golovebox/app/internal/config"
+	"github.com/user/golovebox/app/internal/gateway"
 	"github.com/user/golovebox/promptlang"
-	"github.com/user/golovebox/internal/llm"
+	"github.com/user/golovebox/app/internal/llm"
 	"github.com/user/golovebox/orchestrator"
 	"github.com/user/golovebox/orchestrator/dag"
 	"github.com/user/golovebox/orchestrator/memory"
 	sandboxpkg "github.com/user/golovebox/sandbox"
 	"github.com/user/golovebox/toolskills"
-	"github.com/user/golovebox/internal/setup"
-	"github.com/user/golovebox/internal/web"
+	"github.com/user/golovebox/app/internal/setup"
+	"github.com/user/golovebox/app/internal/web"
 )
 
 // buildEngine constructs the orchestrator engine: the LLM completer adapter plus an

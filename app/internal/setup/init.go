@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	embedassets "github.com/user/golovebox/internal/embed"
+	embedassets "github.com/user/golovebox/app/internal/embed"
 
-	"github.com/user/golovebox/internal/config"
+	"github.com/user/golovebox/app/internal/config"
 	sandboxpkg "github.com/user/golovebox/sandbox"
 )
 
