@@ -1,21 +1,18 @@
-// Package gateway wires external triggers (Telegram, future Slack/Email) to the agent loop.
+// Package gateway wires external triggers (Telegram, future Slack/Email) to the
+// orchestrator engine. It owns VM health/readiness and handler registration, and
+// delegates all agent execution to the injected *orchestrator.Engine.
 package gateway
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/user/golovebox/core"
-	"github.com/user/golovebox/internal/agent"
-	"github.com/user/golovebox/internal/config"
-	"github.com/user/golovebox/internal/llm"
-	"github.com/user/golovebox/internal/memory"
-	"github.com/user/golovebox/internal/tools"
+	"github.com/user/golovebox/orchestrator"
 )
 
 // Handler is implemented by each gateway (Telegram, Slack, Email).
@@ -24,18 +21,18 @@ type Handler interface {
 	Stop() error
 }
 
-// Gateway coordinates shared resources and routes incoming tasks to the agent loop.
+// Gateway coordinates shared resources and routes incoming tasks to the engine.
 type Gateway struct {
 	sb       core.Sandbox
-	llm      *llm.Client
-	cfg      *config.Config
+	engine   *orchestrator.Engine
+	rc       core.RunConfig
 	handlers []Handler
 	mu       sync.Mutex
 }
 
-// New creates a Gateway with a sandbox, LLM client, and config.
-func New(sb core.Sandbox, llmClient *llm.Client, cfg *config.Config) *Gateway {
-	return &Gateway{sb: sb, llm: llmClient, cfg: cfg}
+// New creates a Gateway with a sandbox, the orchestrator engine, and a base RunConfig.
+func New(sb core.Sandbox, engine *orchestrator.Engine, rc core.RunConfig) *Gateway {
+	return &Gateway{sb: sb, engine: engine, rc: rc}
 }
 
 // RegisterHandler adds a handler that will be started by Run.
@@ -84,46 +81,18 @@ func (g *Gateway) Stop() error {
 	return nil
 }
 
-// RunTask executes the full agent workflow for a single GitHub issue:
-// GetIssue → CloneRepo → index README → PlanFromIssue → ReAct loop.
-// progress is forwarded to agent.Loop.Run; pass nil for silent operation.
-func (g *Gateway) RunTask(ctx context.Context, owner, repo string, issueNum int, progress agent.ProgressFunc) (string, error) {
-	issue, err := tools.GetIssue(ctx, g.cfg.GitHubToken, owner, repo, issueNum)
-	if err != nil {
-		return "", fmt.Errorf("get issue: %w", err)
-	}
-
-	destPath := "/root/" + repo
-	cloneErr := tools.CloneRepo(ctx, g.sb, g.cfg.GitHubToken, owner, repo, destPath)
-
-	var mem *memory.Memory
-	if cloneErr == nil {
-		memDir, memDirErr := g.cfg.MemoryDir()
-		if memDirErr == nil {
-			embFn := memory.NewEmbedFnFromConfig(g.cfg.LLMProvider, g.cfg.LLMBaseURL, g.cfg.APIKey)
-			if m, newErr := memory.New(memDir, embFn); newErr == nil {
-				mem = m
-				if readme, readErr := g.sb.GetFile(ctx, destPath+"/README.md"); readErr == nil {
-					_ = mem.Index(ctx, "readme", string(readme))
-				}
-			}
-		}
-	}
-
-	if cloneErr != nil {
-		return "", fmt.Errorf("clone: %w", cloneErr)
-	}
-
-	registry := g.buildRegistry(owner, repo, mem)
-
-	task, err := agent.PlanFromIssue(ctx, g.llm, issue, owner, repo)
-	if err != nil {
-		return "", fmt.Errorf("plan: %w", err)
-	}
-
-	loop := agent.New(g.llm, registry, mem)
-	return loop.Run(ctx, task, progress)
+// RunTask resolves a GitHub issue end-to-end via the engine. Pass nil progress for silence.
+func (g *Gateway) RunTask(ctx context.Context, owner, repo string, issueNum int, progress core.Progress) (string, error) {
+	return g.engine.RunIssueTask(ctx, owner, repo, issueNum, g.rc, progress)
 }
+
+// RunSpecTask runs the agent loop for an arbitrary task string via the engine.
+func (g *Gateway) RunSpecTask(ctx context.Context, task string, progress core.Progress) (string, error) {
+	return g.engine.RunSingleTask(ctx, task, g.rc, progress)
+}
+
+// defaultRepo returns the configured repo used as a fallback for triggers.
+func (g *Gateway) defaultRepo() string { return g.rc.Repo }
 
 // IsVMReady reports whether the sandbox is reachable.
 func (g *Gateway) IsVMReady() bool {
@@ -146,133 +115,4 @@ func (g *Gateway) HealthCheckVM(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("unexpected output: %q", combined)
 	}
 	return "SSH echo ok", nil
-}
-
-// RunSpecTask runs the agent loop for an arbitrary task string.
-// Pass nil for progress to run silently.
-func (g *Gateway) RunSpecTask(ctx context.Context, task string, progress agent.ProgressFunc) (string, error) {
-	var mem *memory.Memory
-	if memDir, err := g.cfg.MemoryDir(); err == nil {
-		embFn := memory.NewEmbedFnFromConfig(g.cfg.LLMProvider, g.cfg.LLMBaseURL, g.cfg.APIKey)
-		if m, newErr := memory.New(memDir, embFn); newErr == nil {
-			mem = m
-		}
-	}
-	registry := g.buildRegistry("", "", mem)
-	loop := agent.New(g.llm, registry, mem)
-	return loop.Run(ctx, task, progress)
-}
-
-// buildRegistry creates the agent tool registry for a specific owner/repo.
-func (g *Gateway) buildRegistry(owner, repo string, mem *memory.Memory) *agent.Registry {
-	r := agent.NewRegistry()
-
-	r.Register(agent.Tool{
-		Name:        "shell",
-		Description: "Execute a shell command in the VM",
-		Parameters:  map[string]string{"cmd": "shell command to execute"},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			return tools.Shell(fCtx, g.sb, params["cmd"]), nil
-		},
-	})
-
-	r.Register(agent.Tool{
-		Name:        "read_file",
-		Description: "Read a file from the VM",
-		Parameters:  map[string]string{"path": "absolute path to the file"},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			data, err := tools.ReadFile(fCtx, g.sb, params["path"])
-			return string(data), err
-		},
-	})
-
-	r.Register(agent.Tool{
-		Name:        "write_file",
-		Description: "Write content to a file in the VM",
-		Parameters:  map[string]string{"path": "absolute path to the file", "content": "file content"},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			if err := tools.WriteFile(fCtx, g.sb, params["path"], []byte(params["content"])); err != nil {
-				return "", err
-			}
-			return "file written", nil
-		},
-	})
-
-	r.Register(agent.Tool{
-		Name:        "list_dir",
-		Description: "List files in a directory in the VM",
-		Parameters:  map[string]string{"path": "absolute path to the directory"},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			entries, err := tools.ListDir(fCtx, g.sb, params["path"])
-			return strings.Join(entries, "\n"), err
-		},
-	})
-
-	r.Register(agent.Tool{
-		Name:        "search_memory",
-		Description: "Search the memory store for relevant context",
-		Parameters:  map[string]string{"query": "search query text"},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			if mem == nil {
-				return "", nil
-			}
-			results, err := mem.Search(fCtx, params["query"], 3)
-			return strings.Join(results, "\n---\n"), err
-		},
-	})
-
-	r.Register(agent.Tool{
-		Name:        "github_list_issues",
-		Description: "List open issues in the GitHub repository",
-		Parameters:  map[string]string{},
-		Execute: func(fCtx context.Context, _ map[string]string) (string, error) {
-			issues, err := tools.ListIssues(fCtx, g.cfg.GitHubToken, owner, repo)
-			if err != nil {
-				return "", err
-			}
-			var sb strings.Builder
-			for _, iss := range issues {
-				sb.WriteString(fmt.Sprintf("#%d: %s\n", iss.GetNumber(), iss.GetTitle()))
-			}
-			return sb.String(), nil
-		},
-	})
-
-	r.Register(agent.Tool{
-		Name:        "github_get_issue",
-		Description: "Get a specific GitHub issue by number",
-		Parameters:  map[string]string{"number": "issue number"},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			num, err := strconv.Atoi(params["number"])
-			if err != nil {
-				return "", fmt.Errorf("invalid issue number: %s", params["number"])
-			}
-			iss, err := tools.GetIssue(fCtx, g.cfg.GitHubToken, owner, repo, num)
-			if err != nil {
-				return "", err
-			}
-			return fmt.Sprintf("Title: %s\nBody:\n%s", iss.GetTitle(), iss.GetBody()), nil
-		},
-	})
-
-	r.Register(agent.Tool{
-		Name:        "github_open_pr",
-		Description: "Open a Pull Request on GitHub",
-		Parameters: map[string]string{
-			"head":  "source branch name",
-			"base":  "target branch (usually main)",
-			"title": "PR title",
-			"body":  "PR description",
-		},
-		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			base := params["base"]
-			if base == "" {
-				base = "main"
-			}
-			return tools.OpenPR(fCtx, g.cfg.GitHubToken, owner, repo,
-				params["head"], base, params["title"], params["body"])
-		},
-	})
-
-	return r
 }

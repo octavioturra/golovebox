@@ -10,7 +10,7 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
-	"github.com/user/golovebox/internal/agent"
+	"github.com/user/golovebox/orchestrator"
 )
 
 // triggerRe matches "issue #42" or "issue #42 repo owner/repo" (case-insensitive).
@@ -79,7 +79,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgbotapi.Messa
 		return
 	}
 
-	owner, repo, issueNum, ok := parseTrigger(text, h.gw.cfg.DefaultRepo)
+	owner, repo, issueNum, ok := parseTrigger(text, h.gw.defaultRepo())
 	if !ok {
 		h.send(msg.Chat.ID, "Usage: issue #<N> [repo owner/repo]")
 		return
@@ -88,8 +88,8 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgbotapi.Messa
 	h.send(msg.Chat.ID, fmt.Sprintf("⚙️ Processando issue #%d em %s/%s...", issueNum, owner, repo))
 
 	chatID := msg.Chat.ID
-	progress := func(iter int, action, _, obs, _, _ string) {
-		h.send(chatID, fmt.Sprintf("🔄 [%d/%d] %s: %s", iter, agent.MaxIterations, action, obs))
+	progress := func(_ string, iter int, action, _, obs, _, _ string) {
+		h.send(chatID, fmt.Sprintf("🔄 [%d/%d] %s: %s", iter, orchestrator.MaxIterations, action, obs))
 	}
 
 	result, err := h.gw.RunTask(ctx, owner, repo, issueNum, progress)

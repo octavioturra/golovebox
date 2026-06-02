@@ -1,4 +1,8 @@
-// Package orchestrator converts parsed spec files into a DAG execution plan via LLM.
+// Package orchestrator is the workflow engine: it turns parsed spec intents into a
+// DAG, executes it (workflow nodes via git/github tools, task nodes via the ReAct
+// loop), and drives single-task and GitHub-issue runs. It depends only on core
+// (substrate, LLM, run config, progress) plus go-github — never on the app's
+// config/web packages. The composition root injects all concrete substrates.
 package orchestrator
 
 import (
@@ -10,22 +14,27 @@ import (
 	"strings"
 
 	"github.com/user/golovebox/core"
-	"github.com/user/golovebox/internal/config"
-	"github.com/user/golovebox/internal/dag"
-	"github.com/user/golovebox/internal/llm"
-	"github.com/user/golovebox/internal/memory"
+	"github.com/user/golovebox/orchestrator/dag"
+	"github.com/user/golovebox/orchestrator/memory"
 )
 
-// Orchestrator transforms spec files into a DAG of executable nodes.
-type Orchestrator struct {
-	llm    *llm.Client
-	memory *memory.Memory
-	cfg    *config.Config
+// Engine is the workflow engine. It holds the injected substrate (sandbox, LLM
+// completer, memory) and an internal CheckpointManager shared across runs.
+type Engine struct {
+	sb        core.Sandbox
+	completer core.Completer
+	memory    *memory.Memory
+	cm        *dag.CheckpointManager
 }
 
-// New creates an Orchestrator.
-func New(llmClient *llm.Client, mem *memory.Memory, cfg *config.Config) *Orchestrator {
-	return &Orchestrator{llm: llmClient, memory: mem, cfg: cfg}
+// New creates an Engine. memory may be nil (semantic search is then a no-op).
+func New(sb core.Sandbox, completer core.Completer, mem *memory.Memory) *Engine {
+	return &Engine{
+		sb:        sb,
+		completer: completer,
+		memory:    mem,
+		cm:        dag.NewCheckpointManager(),
+	}
 }
 
 // nodeDescriptor is the JSON schema the LLM is asked to produce.
@@ -38,8 +47,8 @@ type nodeDescriptor struct {
 }
 
 // Plan sends specs to the LLM and constructs a DAG from the resulting JSON plan.
-// NOT_TODO items are written to tech_debt.md inside runDir (if provided).
-func (o *Orchestrator) Plan(ctx context.Context, runID string, intents []core.Intent, runDir string) (*dag.DAG, error) {
+// NOT_TODO items are written to tech_debt.md inside rc.WorkDir (if provided).
+func (e *Engine) Plan(ctx context.Context, runID string, intents []core.Intent, rc core.RunConfig) (*dag.DAG, error) {
 	if len(intents) == 0 {
 		return nil, fmt.Errorf("orchestrator: no specs provided")
 	}
@@ -49,8 +58,8 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, intents []core.In
 	for _, intent := range intents {
 		debts = append(debts, intent.TechDebts...)
 	}
-	if len(debts) > 0 && runDir != "" {
-		artifactsDir := filepath.Join(runDir, "artifacts")
+	if len(debts) > 0 && rc.WorkDir != "" {
+		artifactsDir := filepath.Join(rc.WorkDir, "artifacts")
 		_ = os.MkdirAll(artifactsDir, 0o755)
 		var sb strings.Builder
 		sb.WriteString("# Tech Debts (NOT_TODO)\n\n")
@@ -61,26 +70,21 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, intents []core.In
 	}
 
 	var repoCtx string
-	if o.cfg != nil && o.cfg.DefaultRepo != "" {
-		repoCtx = fmt.Sprintf(
-			"- DefaultRepo: %s\n- GitHubToken disponível: %v\n- Repositório pode já estar em /root/%s na VM\n",
-			o.cfg.DefaultRepo,
-			o.cfg.GitHubToken != "",
-			repoPathFromRepo(o.cfg.DefaultRepo),
-		)
-	} else if o.cfg != nil && workflowRepo(o.cfg) != "" {
+	if rc.Repo != "" {
+		clonePath := rc.ClonePath
+		if clonePath == "" {
+			clonePath = "/root/" + repoPathFromRepo(rc.Repo)
+		}
 		repoCtx = fmt.Sprintf(
 			"- DefaultRepo: %s\n- GitHubToken disponível: %v\n- Repositório pode já estar em %s na VM\n",
-			o.cfg.Workflow.DefaultRepo,
-			o.cfg.GitHubToken != "",
-			o.cfg.Workflow.ClonePath,
+			rc.Repo,
+			rc.GitHubToken != "",
+			clonePath,
 		)
 	}
 
-	prompt := buildPlanningPrompt(intents, o.cfg, repoCtx)
-	reply, err := o.llm.Complete(ctx, []llm.Message{
-		{Role: "user", Content: prompt},
-	})
+	prompt := buildPlanningPrompt(intents, rc, repoCtx)
+	reply, err := e.completer.Complete(ctx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator: llm: %w", err)
 	}
@@ -93,11 +97,11 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, intents []core.In
 	d := dag.New(runID)
 
 	// Inject sync_repo as the first node when a default repo is configured.
-	if o.cfg != nil && workflowRepo(o.cfg) != "" {
+	if rc.Repo != "" {
 		syncNode := &dag.Node{
 			ID:   "sync_repo",
 			Type: dag.TypeSyncRepo,
-			Task: fmt.Sprintf("Sincronizar %s em %s", workflowRepo(o.cfg), o.cfg.Workflow.ClonePath),
+			Task: fmt.Sprintf("Sincronizar %s em %s", rc.Repo, rc.ClonePath),
 		}
 		if err := d.AddNode(syncNode); err != nil {
 			return nil, fmt.Errorf("orchestrator: add sync_repo: %w", err)
@@ -121,7 +125,7 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, intents []core.In
 			Annotation:   nd.Annotation,
 		}
 		// If sync_repo is injected, all root nodes (no dependencies) must wait for it.
-		if o.cfg != nil && workflowRepo(o.cfg) != "" {
+		if rc.Repo != "" {
 			if len(nd.Dependencies) == 0 {
 				n.Dependencies = []string{"sync_repo"}
 			}
@@ -134,7 +138,7 @@ func (o *Orchestrator) Plan(ctx context.Context, runID string, intents []core.In
 		if nd.ID == "sync_repo" || dag.NodeType(nd.Type) == dag.TypeSyncRepo {
 			continue
 		}
-		if o.cfg != nil && workflowRepo(o.cfg) != "" {
+		if rc.Repo != "" {
 			if len(nd.Dependencies) == 0 {
 				if err := d.AddEdge("sync_repo", nd.ID); err != nil {
 					return nil, fmt.Errorf("orchestrator: sync_repo edge to %s: %w", nd.ID, err)
@@ -316,7 +320,7 @@ func enforceWorkflowOrdering(d *dag.DAG, intents []core.Intent) {
 	}
 }
 
-func buildPlanningPrompt(intents []core.Intent, cfg *config.Config, repoCtx string) string {
+func buildPlanningPrompt(intents []core.Intent, rc core.RunConfig, repoCtx string) string {
 	var sb strings.Builder
 	sb.WriteString(`You are an execution planner. Read the specs below and produce a JSON execution plan.
 
@@ -377,7 +381,7 @@ Return ONLY a JSON array, no markdown fences, no explanation:
 		sb.WriteString("\n\n")
 	}
 
-	if cfg != nil && cfg.Workflow.RunMode == "build_only" {
+	if rc.RunMode == "build_only" {
 		sb.WriteString(`RESTRIÇÃO run_mode=build_only:
 Não inclua nenhum node que execute servidores, processos em background, ou comandos que mantenham
 processo rodando (npm run dev, go run, python app.py, docker run, etc.).
@@ -428,16 +432,6 @@ func parseNodeDescriptors(reply string) ([]nodeDescriptor, error) {
 		return nil, fmt.Errorf("unmarshal: %w (input: %.200s)", err, s)
 	}
 	return nodes, nil
-}
-
-func workflowRepo(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	if cfg.Workflow.DefaultRepo != "" {
-		return cfg.Workflow.DefaultRepo
-	}
-	return cfg.DefaultRepo
 }
 
 func repoPathFromRepo(ownerRepo string) string {

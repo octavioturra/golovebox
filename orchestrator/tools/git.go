@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/user/golovebox/core"
-	"github.com/user/golovebox/internal/dag"
+	"github.com/user/golovebox/orchestrator/dag"
 )
 
 const gitTimeout = 120 * time.Second

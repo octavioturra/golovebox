@@ -8,6 +8,7 @@ require (
 	github.com/user/golovebox/sandbox v0.0.0-00010101000000-000000000000
 	github.com/user/golovebox/toolskills v0.0.0-00010101000000-000000000000
 	github.com/user/golovebox/derivator v0.0.0-00010101000000-000000000000
+	github.com/user/golovebox/orchestrator v0.0.0-00010101000000-000000000000
 	github.com/BurntSushi/toml v1.6.0
 	github.com/digitalocean/go-qemu v0.0.0-20250212194115-ee9b0668d242
 	github.com/go-chi/chi/v5 v5.3.0
@@ -38,4 +39,5 @@ replace (
 	github.com/user/golovebox/sandbox => ./sandbox
 	github.com/user/golovebox/toolskills => ./toolskills
 	github.com/user/golovebox/derivator => ./derivator
+	github.com/user/golovebox/orchestrator => ./orchestrator
 )

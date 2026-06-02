@@ -18,16 +18,47 @@ import (
 
 	"github.com/user/golovebox/core"
 	"github.com/user/golovebox/internal/config"
-	"github.com/user/golovebox/internal/dag"
 	"github.com/user/golovebox/internal/gateway"
 	"github.com/user/golovebox/promptlang"
 	"github.com/user/golovebox/internal/llm"
-	"github.com/user/golovebox/internal/orchestrator"
+	"github.com/user/golovebox/orchestrator"
+	"github.com/user/golovebox/orchestrator/dag"
+	"github.com/user/golovebox/orchestrator/memory"
 	sandboxpkg "github.com/user/golovebox/sandbox"
 	"github.com/user/golovebox/toolskills"
 	"github.com/user/golovebox/internal/setup"
 	"github.com/user/golovebox/internal/web"
 )
+
+// buildEngine constructs the orchestrator engine: the LLM completer adapter plus an
+// optional memory store (nil when embeddings are unavailable, e.g. Anthropic).
+func buildEngine(vm core.Sandbox, llmClient *llm.Client, cfg *config.Config) *orchestrator.Engine {
+	var mem *memory.Memory
+	if memDir, err := cfg.MemoryDir(); err == nil {
+		embFn := memory.NewEmbedFnFromConfig(cfg.LLMProvider, cfg.LLMBaseURL, cfg.APIKey)
+		if m, newErr := memory.New(memDir, embFn); newErr == nil {
+			mem = m
+		}
+	}
+	return orchestrator.New(vm, llm.NewCompleter(llmClient), mem)
+}
+
+// buildRunConfig projects config.Config into a core.RunConfig for a given run dir,
+// resolving the workflow.default_repo → default_repo precedence.
+func buildRunConfig(cfg *config.Config, workDir string) core.RunConfig {
+	repo := cfg.Workflow.DefaultRepo
+	if repo == "" {
+		repo = cfg.DefaultRepo
+	}
+	return core.RunConfig{
+		Repo:          repo,
+		DefaultBranch: cfg.Workflow.DefaultBranch,
+		GitHubToken:   cfg.GitHubToken,
+		WorkDir:       workDir,
+		ClonePath:     cfg.Workflow.ClonePath,
+		RunMode:       cfg.Workflow.RunMode,
+	}
+}
 
 func main() {
 	var logLevel, logFormat string
@@ -211,7 +242,8 @@ func newGitHubCmd() *cobra.Command {
 				Model:   cfg.LLMModel,
 			})
 
-			gw := gateway.New(vm, llmClient, cfg)
+			engine := buildEngine(vm, llmClient, cfg)
+			gw := gateway.New(vm, engine, buildRunConfig(cfg, ""))
 			fmt.Printf("Resolving issue #%d in %s/%s...\n", issueFlag, owner, repo)
 			result, err := gw.RunTask(ctx, owner, repo, issueFlag, nil)
 			if err != nil {
@@ -260,7 +292,8 @@ func newDaemonCmd() *cobra.Command {
 				Model:   cfg.LLMModel,
 			})
 
-			gw := gateway.New(vm, llmClient, cfg)
+			engine := buildEngine(vm, llmClient, cfg)
+			gw := gateway.New(vm, engine, buildRunConfig(cfg, ""))
 
 			if cfg.TelegramToken != "" {
 				th, err := gateway.NewTelegramHandler(cfg.TelegramToken, gw)
@@ -316,8 +349,7 @@ func newRunCmd() *cobra.Command {
 				APIKey:  cfg.APIKey,
 				Model:   cfg.LLMModel,
 			})
-			gw := gateway.New(vm, llmClient, cfg)
-			orch := orchestrator.New(llmClient, nil, cfg)
+			engine := buildEngine(vm, llmClient, cfg)
 
 			// Parse specs.
 			var intents []core.Intent
@@ -354,27 +386,19 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 			runDir := store.RunDir(runID)
+			rc := buildRunConfig(cfg, runDir)
 			fmt.Printf("Run: %s\n", runID)
 
-			d, err := orch.Plan(ctx, runID, intents, runDir)
+			d, err := engine.Plan(ctx, runID, intents, rc)
 			if err != nil {
 				return fmt.Errorf("plan: %w", err)
 			}
 
-			cm := dag.NewCheckpointManager()
 			scanner := bufio.NewScanner(os.Stdin)
 
+			// notify prints state transitions and drives interactive checkpoints via stdin.
 			notify := func(node *dag.Node) {
 				fmt.Printf("[%-14s] %s\n", node.State, node.ID)
-			}
-			dispatch := func(dCtx context.Context, node *dag.Node) (string, error) {
-				return gw.RunSpecTask(dCtx, node.Task, func(iter int, action, _, obs, _, _ string) {
-					fmt.Printf("  [%d] %s: %s\n", iter, action, truncate(obs, 80))
-				})
-			}
-
-			exec := dag.NewExecutor(d, dag.ExecutorConfig{}, dispatch, func(node *dag.Node) {
-				notify(node)
 				if node.State == dag.StateWaitingHuman {
 					fmt.Printf("  ↳ Checkpoint: %s\n", node.Annotation)
 					fmt.Print("  approve / reject: ")
@@ -385,15 +409,18 @@ func newRunCmd() *cobra.Command {
 							if reason == "" {
 								reason = "rejeitado manualmente"
 							}
-							cm.Reject(node.ID, reason)
+							engine.Reject(node.ID, reason)
 						} else {
-							cm.Approve(node.ID)
+							engine.Approve(node.ID)
 						}
 					}
 				}
-			}, cm, runDir)
+			}
+			prog := func(_ string, iter int, action, _, obs, _, _ string) {
+				fmt.Printf("  [%d] %s: %s\n", iter, action, truncate(obs, 80))
+			}
 
-			if err := exec.Run(ctx); err != nil {
+			if err := engine.Run(ctx, d, rc, notify, prog); err != nil {
 				return fmt.Errorf("run: %w", err)
 			}
 			fmt.Printf("\n✓ Run %s completo. Relatório: %s\n", runID, filepath.Join(runDir, "run_summary.md"))
@@ -439,8 +466,8 @@ func newWebCmd() *cobra.Command {
 				APIKey:  cfg.APIKey,
 				Model:   cfg.LLMModel,
 			})
-			gw := gateway.New(vm, llmClient, cfg)
-			orch := orchestrator.New(llmClient, nil, cfg)
+			engine := buildEngine(vm, llmClient, cfg)
+			gw := gateway.New(vm, engine, buildRunConfig(cfg, ""))
 
 			skillsDir, err := cfg.SkillsDir()
 			if err != nil {
@@ -455,9 +482,8 @@ func newWebCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cm := dag.NewCheckpointManager()
 
-			srv, err := web.New(gw, vm, orch, cm, reg, llmClient, cfg, runsDir)
+			srv, err := web.New(gw, vm, engine, reg, llmClient, cfg, runsDir)
 			if err != nil {
 				return err
 			}
@@ -605,10 +631,6 @@ func newResumeCmd() *cobra.Command {
 				return err
 			}
 			runID := args[0]
-			d, err := store.LoadDAG(runID)
-			if err != nil {
-				return fmt.Errorf("load run %s: %w", runID, err)
-			}
 
 			sbCfg, err := makeSandboxConfig(cfg)
 			if err != nil {
@@ -627,20 +649,16 @@ func newResumeCmd() *cobra.Command {
 				APIKey:  cfg.APIKey,
 				Model:   cfg.LLMModel,
 			})
-			gw := gateway.New(vm, llmClient, cfg)
-			cm := dag.NewCheckpointManager()
-			runDir := store.RunDir(runID)
+			engine := buildEngine(vm, llmClient, cfg)
+			rc := buildRunConfig(cfg, store.RunDir(runID))
 
-			dispatch := func(dCtx context.Context, node *dag.Node) (string, error) {
-				return gw.RunSpecTask(dCtx, node.Task, func(iter int, action, _, obs, _, _ string) {
-					fmt.Printf("  [%d] %s: %s\n", iter, action, truncate(obs, 80))
-				})
-			}
 			notify := func(node *dag.Node) {
 				fmt.Printf("[%-14s] %s\n", node.State, node.ID)
 			}
-			exec := dag.NewExecutor(d, dag.ExecutorConfig{}, dispatch, notify, cm, runDir)
-			if err := exec.Resume(ctx); err != nil {
+			prog := func(_ string, iter int, action, _, obs, _, _ string) {
+				fmt.Printf("  [%d] %s: %s\n", iter, action, truncate(obs, 80))
+			}
+			if err := engine.Resume(ctx, rc, notify, prog); err != nil {
 				return fmt.Errorf("resume: %w", err)
 			}
 			fmt.Printf("✓ Run %s completo.\n", runID)

@@ -7,4 +7,5 @@ use (
 	./sandbox
 	./toolskills
 	./derivator
+	./orchestrator
 )

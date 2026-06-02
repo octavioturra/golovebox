@@ -115,3 +115,23 @@ type PromptGraph struct {
 type Deriver interface {
 	Derive(ctx context.Context, seed string) (PromptGraph, error)
 }
+
+// --- Orchestration ---
+
+// Progress is an observability callback invoked once per ReAct iteration.
+// The app implements it (NodeLog persistence + SSE broadcast); the orchestrator
+// only calls it. It replaces the agent loop's direct coupling to web.NodeLog.
+type Progress func(nodeID string, iter int, action, params, obs, prompt, reply string)
+
+// RunConfig carries the per-run values the app injects into the orchestrator,
+// so the engine never imports internal/config. Tokens and paths come from the
+// composition root, which resolves any precedence (e.g. workflow.default_repo →
+// default_repo) before populating Repo.
+type RunConfig struct {
+	Repo          string // owner/repo, already resolved by the app
+	DefaultBranch string // base branch for PRs
+	GitHubToken   string
+	WorkDir       string // run directory, e.g. .golovebox/runs/<id>/
+	ClonePath     string // repo path inside the VM, e.g. /root/repo
+	RunMode       string // "build_only" restricts the planning prompt; "" = unrestricted
+}

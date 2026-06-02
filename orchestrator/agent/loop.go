@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/user/golovebox/internal/llm"
-	"github.com/user/golovebox/internal/memory"
+	"github.com/user/golovebox/core"
+	"github.com/user/golovebox/orchestrator/memory"
 )
 
 // MaxIterations is the maximum number of ReAct loop iterations before giving up.
@@ -49,16 +49,16 @@ Parameters:
 type ProgressFunc func(iteration int, action, params, observation, prompt, reply string)
 
 type Loop struct {
-	llm      *llm.Client
-	registry *Registry
-	memory   *memory.Memory
+	completer core.Completer
+	registry  *Registry
+	memory    *memory.Memory
 }
 
-func New(llmClient *llm.Client, registry *Registry, mem *memory.Memory) *Loop {
+func New(completer core.Completer, registry *Registry, mem *memory.Memory) *Loop {
 	return &Loop{
-		llm:      llmClient,
-		registry: registry,
-		memory:   mem,
+		completer: completer,
+		registry:  registry,
+		memory:    mem,
 	}
 }
 
@@ -67,17 +67,20 @@ func New(llmClient *llm.Client, registry *Registry, mem *memory.Memory) *Loop {
 // and a truncated observation (max 120 chars). Pass nil to disable progress reporting.
 func (l *Loop) Run(ctx context.Context, task string, progress ProgressFunc) (string, error) {
 	systemPrompt := fmt.Sprintf(systemPromptTemplate, l.registry.Descriptions())
-	messages := []llm.Message{
-		{Role: "user", Content: systemPrompt + "\n\nTask:\n" + task},
-	}
+
+	// core.Completer takes a single prompt string (the llm adapter sends it as one
+	// user message), so the conversation is accumulated as a running text transcript:
+	// the system prompt + task, then each assistant reply followed by its observation.
+	// `increment` tracks what was newly added this iteration — that is what the node
+	// panel records as the per-iter `prompt` (initial task on iter 0, observation after).
+	var transcript strings.Builder
+	increment := systemPrompt + "\n\nTask:\n" + task
+	transcript.WriteString(increment)
 
 	for i := range MaxIterations {
-		lastPrompt := ""
-		if n := len(messages); n > 0 {
-			lastPrompt = messages[n-1].Content
-		}
+		lastPrompt := increment
 
-		reply, err := l.llm.Complete(ctx, messages)
+		reply, err := l.completer.Complete(ctx, transcript.String())
 		if err != nil {
 			return "", fmt.Errorf("llm complete (iter %d): %w", i, err)
 		}
@@ -96,7 +99,8 @@ func (l *Loop) Run(ctx context.Context, task string, progress ProgressFunc) (str
 		tool, ok := l.registry.Get(action)
 		if !ok {
 			observation := fmt.Sprintf("Error: unknown tool %q. Use one of the available tools.", action)
-			messages = appendObservation(messages, reply, observation)
+			increment = "Observation: " + observation
+			transcript.WriteString("\n\n" + reply + "\n\n" + increment)
 			continue
 		}
 
@@ -117,7 +121,8 @@ func (l *Loop) Run(ctx context.Context, task string, progress ProgressFunc) (str
 			progress(i+1, action, formatParams(params), obs, lastPrompt, reply)
 		}
 
-		messages = appendObservation(messages, reply, observation)
+		increment = "Observation: " + observation
+		transcript.WriteString("\n\n" + reply + "\n\n" + increment)
 	}
 
 	return "", fmt.Errorf("agent: reached max iterations (%d) without completing task", MaxIterations)
@@ -141,13 +146,6 @@ func formatParams(params map[string]string) string {
 		}
 	}
 	return strings.Join(parts, "\n")
-}
-
-func appendObservation(messages []llm.Message, reply, observation string) []llm.Message {
-	return append(messages,
-		llm.Message{Role: "assistant", Content: reply},
-		llm.Message{Role: "user", Content: "Observation: " + observation},
-	)
 }
 
 // parseAction extracts thought, action name, and parameters from an LLM reply.

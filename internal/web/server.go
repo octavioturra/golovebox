@@ -21,14 +21,13 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/user/golovebox/core"
 	"github.com/user/golovebox/internal/config"
-	"github.com/user/golovebox/internal/dag"
 	"github.com/user/golovebox/internal/gateway"
 	"github.com/user/golovebox/promptlang"
 	"github.com/user/golovebox/internal/llm"
-	"github.com/user/golovebox/internal/orchestrator"
+	"github.com/user/golovebox/orchestrator"
+	"github.com/user/golovebox/orchestrator/dag"
 	sandboxpkg "github.com/user/golovebox/sandbox"
 	"github.com/user/golovebox/toolskills"
-	"github.com/user/golovebox/internal/tools"
 )
 
 //go:embed static
@@ -44,8 +43,7 @@ type Server struct {
 	gw              *gateway.Gateway
 	sb              core.Sandbox
 	interactive     *sandboxpkg.VM
-	orch            *orchestrator.Orchestrator
-	checkpoint      *dag.CheckpointManager
+	engine          *orchestrator.Engine
 	skillsReg       *toolskills.Registry
 	llmClient       *llm.Client
 	store           *RunStore
@@ -58,7 +56,7 @@ type Server struct {
 }
 
 // New creates the Server wiring all components together.
-func New(gw *gateway.Gateway, vm *sandboxpkg.VM, orch *orchestrator.Orchestrator, cm *dag.CheckpointManager, reg *toolskills.Registry, llmClient *llm.Client, cfg *config.Config, runsDir string) (*Server, error) {
+func New(gw *gateway.Gateway, vm *sandboxpkg.VM, engine *orchestrator.Engine, reg *toolskills.Registry, llmClient *llm.Client, cfg *config.Config, runsDir string) (*Server, error) {
 	store, err := NewRunStore(runsDir)
 	if err != nil {
 		return nil, err
@@ -67,8 +65,7 @@ func New(gw *gateway.Gateway, vm *sandboxpkg.VM, orch *orchestrator.Orchestrator
 		gw:          gw,
 		sb:          vm,
 		interactive: vm,
-		orch:        orch,
-		checkpoint:  cm,
+		engine:      engine,
 		skillsReg:   reg,
 		llmClient:   llmClient,
 		store:       store,
@@ -76,6 +73,18 @@ func New(gw *gateway.Gateway, vm *sandboxpkg.VM, orch *orchestrator.Orchestrator
 		sseClients:  make(map[string][]*sseClient),
 		activeRuns:  make(map[string]*dag.DAG),
 	}, nil
+}
+
+// runConfig builds the per-run core.RunConfig from the server's config and the run dir.
+func (s *Server) runConfig(runDir string) core.RunConfig {
+	return core.RunConfig{
+		Repo:          resolveRepo(s.cfg),
+		DefaultBranch: s.cfg.Workflow.DefaultBranch,
+		GitHubToken:   s.cfg.GitHubToken,
+		WorkDir:       runDir,
+		ClonePath:     s.cfg.Workflow.ClonePath,
+		RunMode:       s.cfg.Workflow.RunMode,
+	}
 }
 
 // Start registers all routes and begins serving on addr.
@@ -243,7 +252,7 @@ func (s *Server) launchSingleTask(w http.ResponseWriter, ctx context.Context, ru
 			delete(s.activeRuns, runID)
 			s.mu.Unlock()
 		}()
-		_, _ = s.gw.RunSpecTask(runCtx, task, func(iter int, action, params, obs, prompt, reply string) {
+		_, _ = s.engine.RunSingleTask(runCtx, task, s.runConfig(runDir), func(_ string, iter int, action, params, obs, prompt, reply string) {
 			nodelog.Append(iter, action, params, obs, prompt, reply)
 			s.broadcastNodeLog(runID, nodeID, NodeLogEntry{iter, action, params, obs, prompt, reply, time.Now()})
 			_ = appendFile(filepath.Join(runDir, "logs", nodeID+".log"),
@@ -256,7 +265,8 @@ func (s *Server) launchSingleTask(w http.ResponseWriter, ctx context.Context, ru
 
 func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID string, intents []core.Intent) {
 	runDir := s.store.RunDir(runID)
-	d, err := s.orch.Plan(ctx, runID, intents, runDir)
+	rc := s.runConfig(runDir)
+	d, err := s.engine.Plan(ctx, runID, intents, rc)
 	if err != nil {
 		http.Error(w, "plan: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -269,69 +279,21 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 	s.activeRuns[runID] = d
 	s.mu.Unlock()
 
+	// notify observes node state transitions (SSE broadcast of the whole node).
 	notify := func(node *dag.Node) {
 		data, _ := json.Marshal(node)
 		s.broadcast(runID, string(data))
 	}
 
-	dispatch := func(dCtx context.Context, node *dag.Node) (string, error) {
-		// Workflow node types are dispatched directly, not through the agent loop.
-		switch node.Type {
-		case dag.TypeSyncRepo:
-			return tools.SyncRepo(dCtx, s.sb,
-				s.cfg.GitHubToken,
-				resolveRepo(s.cfg),
-				s.cfg.Workflow.ClonePath,
-				s.cfg.Workflow.DefaultBranch,
-			)
-
-		case dag.TypeBranch:
-			branchName := node.Annotation
-			if branchName == "" {
-				branchName = node.Task
-			}
-			out, err := tools.ExecBranch(dCtx, s.sb, s.cfg.Workflow.ClonePath, branchName)
-			if err == nil {
-				s.store.SetRunMeta(runID, "current_branch", branchName)
-			}
-			return out, err
-
-		case dag.TypePush:
-			branch := s.store.GetRunMeta(runID, "current_branch")
-			return tools.ExecPush(dCtx, s.sb, s.cfg.GitHubToken, s.cfg.Workflow.ClonePath, branch)
-
-		case dag.TypePR:
-			parts := strings.SplitN(resolveRepo(s.cfg), "/", 2)
-			if len(parts) != 2 {
-				return "", fmt.Errorf("workflow.default_repo not set or invalid")
-			}
-			owner, repo := parts[0], parts[1]
-			branch := s.store.GetRunMeta(runID, "current_branch")
-			titleParam := node.Annotation
-			if titleParam == "" {
-				task := s.store.ReadTask(runID)
-				if len(task) > 60 {
-					task = task[:60] + "..."
-				}
-				titleParam = "feat: " + task
-			}
-			body := fmt.Sprintf("## O que foi feito\n\n%s\n\n---\n*Gerado pelo golovebox run `%s`*",
-				s.store.ReadTask(runID), runID)
-			return tools.ExecPR(dCtx, s.cfg.GitHubToken, owner, repo,
-				branch, s.cfg.Workflow.DefaultBranch, titleParam, body)
-		}
-
-		// Default: run through the agent loop.
-		nodelog := s.store.NodeLogFor(runID, node.ID)
-		logPath := filepath.Join(runDir, "logs", node.ID+".log")
-		return s.gw.RunSpecTask(dCtx, node.Task, func(iter int, action, params, obs, prompt, reply string) {
-			nodelog.Append(iter, action, params, obs, prompt, reply)
-			s.broadcastNodeLog(runID, node.ID, NodeLogEntry{iter, action, params, obs, prompt, reply, time.Now()})
-			_ = appendFile(logPath, fmt.Sprintf("[%d] %s: %s\n", iter, action, obs))
-		})
+	// prog records each ReAct iteration (NodeLog + node_log SSE) for task nodes.
+	prog := func(nodeID string, iter int, action, params, obs, prompt, reply string) {
+		nodelog := s.store.NodeLogFor(runID, nodeID)
+		nodelog.Append(iter, action, params, obs, prompt, reply)
+		s.broadcastNodeLog(runID, nodeID, NodeLogEntry{iter, action, params, obs, prompt, reply, time.Now()})
+		_ = appendFile(filepath.Join(runDir, "logs", nodeID+".log"),
+			fmt.Sprintf("[%d] %s: %s\n", iter, action, obs))
 	}
 
-	exec := dag.NewExecutor(d, dag.ExecutorConfig{}, dispatch, notify, s.checkpoint, runDir)
 	go func() {
 		defer func() {
 			cancel()
@@ -340,7 +302,7 @@ func (s *Server) launchRun(w http.ResponseWriter, ctx context.Context, runID str
 			delete(s.activeRuns, runID)
 			s.mu.Unlock()
 		}()
-		if err := exec.Run(runCtx); err != nil {
+		if err := s.engine.Run(runCtx, d, rc, notify, prog); err != nil {
 			slog.Warn("run finished with error", "run_id", runID, "error", err)
 		}
 	}()
@@ -433,7 +395,7 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	s.checkpoint.Approve(chi.URLParam(r, "nodeID"))
+	s.engine.Approve(chi.URLParam(r, "nodeID"))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -445,7 +407,7 @@ func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Reason == "" {
 		body.Reason = "rejeitado pelo usuário"
 	}
-	s.checkpoint.Reject(nodeID, body.Reason)
+	s.engine.Reject(nodeID, body.Reason)
 	w.WriteHeader(http.StatusOK)
 }
 

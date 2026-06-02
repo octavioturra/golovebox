@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/user/golovebox/internal/dag"
+	"github.com/user/golovebox/orchestrator/dag"
 )
 
 // RunStore manages run directories under .golovebox/runs/.

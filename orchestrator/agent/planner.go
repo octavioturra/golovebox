@@ -6,12 +6,12 @@ import (
 
 	gogithub "github.com/google/go-github/v60/github"
 
-	"github.com/user/golovebox/internal/llm"
+	"github.com/user/golovebox/core"
 )
 
 // PlanFromIssue asks the LLM to elaborate a detailed task description from a GitHub issue.
 // The returned string is used as input to Loop.Run.
-func PlanFromIssue(ctx context.Context, c *llm.Client, issue *gogithub.Issue, owner, repo string) (string, error) {
+func PlanFromIssue(ctx context.Context, c core.Completer, issue *gogithub.Issue, owner, repo string) (string, error) {
 	prompt := fmt.Sprintf(
 		"GitHub issue #%d in %s/%s\n\nTitle: %s\nBody:\n%s\n\n"+
 			"The repository has been cloned to /root/%s.\n"+
@@ -25,6 +25,5 @@ func PlanFromIssue(ctx context.Context, c *llm.Client, issue *gogithub.Issue, ow
 		issue.GetNumber(),
 	)
 
-	messages := []llm.Message{{Role: "user", Content: prompt}}
-	return c.Complete(ctx, messages)
+	return c.Complete(ctx, prompt)
 }
