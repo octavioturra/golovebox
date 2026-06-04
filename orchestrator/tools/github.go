@@ -55,6 +55,10 @@ func CloneRepo(ctx context.Context, sb core.Sandbox, token, owner, repo, destPat
 // OpenPR creates a Pull Request and returns its HTML URL.
 func OpenPR(ctx context.Context, token, owner, repo, head, base, title, body string) (string, error) {
 	client := gogithub.NewClient(nil).WithAuthToken(token)
+	base, err := resolveBase(ctx, client, owner, repo, base)
+	if err != nil {
+		return "", err
+	}
 	pr, _, err := client.PullRequests.Create(ctx, owner, repo, &gogithub.NewPullRequest{
 		Title: &title,
 		Head:  &head,

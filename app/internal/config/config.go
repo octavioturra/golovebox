@@ -136,9 +136,9 @@ func (c *Config) applyDefaults() {
 	if c.Workflow.RunMode == "" {
 		c.Workflow.RunMode = "build_only"
 	}
-	if c.Workflow.DefaultBranch == "" {
-		c.Workflow.DefaultBranch = "main"
-	}
+	// DefaultBranch is intentionally left empty when unset: the orchestrator
+	// resolves the repository's actual default branch via the GitHub API at PR
+	// time, which avoids a 422 "base invalid" error on repos that don't use "main".
 }
 
 func Save(cfg *Config) error {

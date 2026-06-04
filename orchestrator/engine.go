@@ -248,12 +248,9 @@ func (e *Engine) buildRegistry(owner, repo, token string) *agent.Registry {
 			"body":  "PR description",
 		},
 		Execute: func(fCtx context.Context, params map[string]string) (string, error) {
-			base := params["base"]
-			if base == "" {
-				base = "main"
-			}
+			// Empty base lets OpenPR resolve the repo's actual default branch.
 			return tools.OpenPR(fCtx, token, owner, repo,
-				params["head"], base, params["title"], params["body"])
+				params["head"], params["base"], params["title"], params["body"])
 		},
 	})
 

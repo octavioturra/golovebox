@@ -113,6 +113,11 @@ func ExecPRWithBase(ctx context.Context, token, owner, repo, head, base, titlePa
 		}
 	}
 
+	base, err := resolveBase(ctx, client, owner, repo, base)
+	if err != nil {
+		return "", err
+	}
+
 	prs, _, err := client.PullRequests.List(ctx, owner, repo, &gogithub.PullRequestListOptions{
 		State: "open",
 		Head:  owner + ":" + head,
@@ -135,6 +140,21 @@ func ExecPRWithBase(ctx context.Context, token, owner, repo, head, base, titlePa
 		return "", fmt.Errorf("create PR: %w", err)
 	}
 	return fmt.Sprintf("PR #%d criado: %s", pr.GetNumber(), pr.GetHTMLURL()), nil
+}
+
+// resolveBase returns the base branch to target for a PR. When base is empty,
+// it queries the repository's actual default branch (which may be "master",
+// "main", or anything else) instead of assuming "main" — avoiding the GitHub
+// 422 "base invalid" error on repos whose default branch differs.
+func resolveBase(ctx context.Context, client *gogithub.Client, owner, repo, base string) (string, error) {
+	if base != "" {
+		return base, nil
+	}
+	r, _, err := client.Repositories.Get(ctx, owner, repo)
+	if err != nil {
+		return "", fmt.Errorf("resolve default branch for %s/%s: %w", owner, repo, err)
+	}
+	return r.GetDefaultBranch(), nil
 }
 
 func isGitConflict(output string) bool {
