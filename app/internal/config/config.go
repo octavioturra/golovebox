@@ -10,7 +10,7 @@ import (
 type WorkflowConfig struct {
 	DefaultRepo   string `toml:"default_repo"`
 	ClonePath     string `toml:"clone_path"`
-	RunMode       string `toml:"run_mode"`       // "build_only" | "full"
+	RunMode       string `toml:"run_mode"` // "build_only" | "full"
 	DefaultBranch string `toml:"default_branch"`
 }
 
@@ -43,6 +43,10 @@ func DefaultBaseURL(provider string) string {
 
 func BaseDir() (string, error) {
 	execPath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
 	if err != nil {
 		return "", err
 	}

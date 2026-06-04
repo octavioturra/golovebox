@@ -81,7 +81,7 @@ func Start(cfg Config) (*Manager, error) {
 	}
 
 	// Pass firmware directory when the share/ dir exists alongside the binary.
-	shareDir := filepath.Join(cfg.QEMUDir, "share", "qemu")
+	shareDir := filepath.Join(cfg.QEMUDir, "share")
 	if _, serr := os.Stat(shareDir); serr == nil {
 		args = append([]string{"-L", shareDir}, args...)
 	}

@@ -86,7 +86,7 @@ func FetchAlpine() error {
 // and copies the needed files (exe, DLLs, firmware) into the embed asset directory.
 //
 // The installer is an NSIS package — 7-zip can extract it without running it.
-// Only qemu-system-x86_64.exe, qemu-img.exe, all *.dll, and share/qemu/ are kept.
+// Only qemu-system-x86_64.exe, qemu-img.exe, all *.dll, and share/ are kept.
 func FetchWindows() error {
 	marker := filepath.Join(winQEMUDir, "qemu-system-x86_64.exe")
 	if _, err := os.Stat(marker); err == nil {
@@ -270,7 +270,7 @@ func Check() error {
 	checks := []assetCheck{
 		{filepath.Join(winQEMUDir, "qemu-system-x86_64.exe"), 10_000_000, "Windows qemu-system-x86_64.exe"},
 		{filepath.Join(winQEMUDir, "qemu-img.exe"), 1_000_000, "Windows qemu-img.exe"},
-		{filepath.Join(winQEMUDir, "share", "qemu", "bios-256k.bin"), 100_000, "QEMU BIOS firmware"},
+		{filepath.Join(winQEMUDir, "share", "bios-256k.bin"), 100_000, "QEMU BIOS firmware"},
 		{alpineISODest, 40_000_000, "Alpine Virt ISO"},
 	}
 
@@ -387,7 +387,7 @@ func parseLatestQEMUURL() (installerURL, sha512URL string, err error) {
 // and copies only the files needed at runtime into destDir:
 //   - qemu-system-x86_64.exe and qemu-img.exe → destDir/ (flat)
 //   - *.dll                                   → destDir/ (flat)
-//   - share/qemu/*                            → destDir/share/qemu/ (firmware)
+//   - share/*                            → destDir/share/ (firmware)
 //
 // All other files (qemu-system-arm*.exe, uninstall*.exe, *.html, etc.) are skipped.
 func filterAndCopyQEMU(srcDir, destDir string) error {
@@ -409,9 +409,9 @@ func filterAndCopyQEMU(srcDir, destDir string) error {
 		case strings.HasSuffix(base, ".dll"):
 			destRel = info.Name() // flat: all DLLs at root
 			dlls++
-		case strings.Contains(slashRel, "share/qemu/"):
-			// Preserve share/qemu/ hierarchy for firmware files.
-			idx := strings.Index(slashRel, "share/qemu/")
+		case strings.Contains(slashRel, "share/"):
+			// Preserve share/ hierarchy for firmware files.
+			idx := strings.Index(slashRel, "share/")
 			destRel = filepath.FromSlash(slashRel[idx:])
 			fw++
 		case base == "qemu-system-x86_64.exe" || base == "qemu-img.exe":
@@ -427,9 +427,15 @@ func filterAndCopyQEMU(srcDir, destDir string) error {
 		}
 		return copyFile(path, dest)
 	})
+
 	if err != nil {
 		return err
 	}
+
+	if dlls == 0 || exes == 0 || fw == 0 {
+		return fmt.Errorf("unexpectedly found too few files: %d DLLs, %d exes, %d firmware files", dlls, exes, fw)
+	}
+
 	fmt.Printf("[fetch] Copied: %d DLLs, %d exes, %d firmware files → %s\n",
 		dlls, exes, fw, destDir)
 	if dlls < 20 {
