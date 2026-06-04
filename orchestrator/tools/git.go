@@ -97,7 +97,21 @@ func ExecPush(ctx context.Context, sb core.Sandbox, token, clonePath, branch str
 
 // ExecPR creates or updates a GitHub PR for the given branch.
 func ExecPR(ctx context.Context, token, owner, repo, head, base, titleParam, body string) (string, error) {
+	return ExecPRWithBase(ctx, token, owner, repo, head, base, titleParam, body, "")
+}
+
+// ExecPRWithBase is the testable variant of ExecPR that accepts an optional
+// base URL for the GitHub API client (used in unit tests with httptest.Server).
+// Pass an empty string for production use.
+func ExecPRWithBase(ctx context.Context, token, owner, repo, head, base, titleParam, body, apiBaseURL string) (string, error) {
 	client := gogithub.NewClient(nil).WithAuthToken(token)
+	if apiBaseURL != "" {
+		var err error
+		client, err = client.WithEnterpriseURLs(apiBaseURL, apiBaseURL)
+		if err != nil {
+			return "", fmt.Errorf("github client base url: %w", err)
+		}
+	}
 
 	prs, _, err := client.PullRequests.List(ctx, owner, repo, &gogithub.PullRequestListOptions{
 		State: "open",

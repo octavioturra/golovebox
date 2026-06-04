@@ -4,10 +4,13 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  schedule:
+    - cron: "0 3 * * *"  # nightly 03:00 UTC
 
 jobs:
+  # ── Trilho FAST (bloqueia merge) ──────────────────────────────────────────
   module:
-    name: "module / ${{ matrix.mod }}"
+    name: "fast / module / ${{ matrix.mod }}"
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -19,17 +22,17 @@ jobs:
         with:
           go-version: "1.26"
           cache-dependency-path: "${{ matrix.mod }}/go.sum"
-      - name: vet + test
+      - name: vet + test (unit, no resource)
         working-directory: ${{ matrix.mod }}
         env:
           CGO_ENABLED: "0"
           GOWORK: "off"
         run: |
           go vet ./...
-          go test ./...
+          go test -short ./...
 
   boundary:
-    name: "boundary / dependency invariant"
+    name: "fast / boundary / dependency invariant"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,8 +51,8 @@ jobs:
             fi
           done
 
-  integration:
-    name: "integration / build"
+  integration-build:
+    name: "fast / integration / build via workspace"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,7 +60,56 @@ jobs:
         with:
           go-version: "1.26"
           cache-dependency-path: "app/go.sum"
-      - name: build app via workspace
+      - name: go build (workspace)
         env:
           CGO_ENABLED: "0"
         run: cd app && go build ./...
+
+  # ── Trilho HEAVY (alerta, não bloqueia merge) ────────────────────────────
+  integration-sandbox:
+    name: "heavy / sandbox / QEMU integration"
+    if: |
+      github.event_name == 'schedule' ||
+      contains(github.event.pull_request.labels.*.name, 'test:heavy') ||
+      (github.event_name == 'push' && contains(github.event.head_commit.modified, 'sandbox/'))
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: "sandbox/go.sum"
+      - name: install QEMU (KVM)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y qemu-system-x86 qemu-utils
+      - name: sandbox integration tests
+        working-directory: sandbox
+        env:
+          CGO_ENABLED: "0"
+          GOWORK: "off"
+        run: go test -tags integration -timeout 10m ./...
+
+  integration-e2e:
+    name: "heavy / e2e / full run"
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: "app/go.sum"
+      - name: install QEMU (KVM)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y qemu-system-x86 qemu-utils
+      - name: e2e test
+        working-directory: app
+        env:
+          CGO_ENABLED: "0"
+          GLB_LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          GLB_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: go test -tags e2e -timeout 20m ./...
