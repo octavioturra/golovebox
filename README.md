@@ -504,32 +504,37 @@ Set `telegram_token` in config and run `golovebox daemon`:
 
 ## Project structure
 
+Go workspace — 7 independent modules. Dependency arrows point only to `core`.
+
 ```
 golovebox/
-├── cmd/golovebox/main.go
-├── magefile.go
-└── internal/
-    ├── agent/          ReAct loop, ProgressFunc(iter, action, params, obs, prompt, reply), heredoc parser, tool registry
-    ├── config/         Portable paths (relative to executable), WorkflowConfig
-    ├── dag/            DAG types, Executor (parallel), CheckpointManager
-    ├── dsl/            Keyword parser: NEW BRANCH, PUSH, PR, ATTENTION_HERE, RUN_TEST…
-    ├── embed/          go:embed assets, extract.go, keygen.go, cloudinit.go
-    ├── gateway/        Handler interface, Gateway router, TelegramHandler
-    ├── llm/            HTTP client, OpenAI-compat + Anthropic header, retry backoff
-    ├── memory/         chromem-go wrapper, per-agent isolated collections
-    ├── orchestrator/   Specs → DAG via LLM; sync_repo auto-injection (workflowRepo fallback); self-contained tasks; run_mode prompt
-    ├── sandbox/        qemu.go, qmp.go, ssh.go, pool.go (keepalive + fresh-dial retry)
-    ├── setup/          7-step init wizard (idempotent)
-    ├── skills/         Local registry + LLM generator
-    ├── tools/          shell.go (stall detection), files.go, git.go (SyncRepo + persistent credentials), github.go
-    └── web/
-        ├── server.go   chi router, handlers, SSE broker, WebSocket terminal
-        ├── store.go    RunStore — cancelMap, NodeLogFor, RunMeta
-        ├── nodelog.go  NodeLog — memory buffer + .jsonl append-only
-        ├── terminal.go WebSocket ↔ SSH PTY bridge
-        └── static/
-            └── index.html  Alpine.js components + Cytoscape DAG + xterm.js
+├── go.work              ← workspace root (no go.mod here)
+├── core/                ← contracts and domain types, zero deps
+├── promptlang/          ← DSL spec → core.Intent  (parser, adapter, keywords)
+├── sandbox/             ← QEMU VM, SSH/SFTP, pool  (core.Sandbox impl)
+├── toolskills/          ← skills registry + provisioner  (core.Provisioner impl)
+├── derivator/           ← seed → PromptGraph  (core.Deriver impl)
+├── orchestrator/        ← Engine: Intent→DAG, executor, ReAct loop
+│   └── dag/, agent/, tools/, memory/
+└── app/                 ← composition root + CLI + Web UI + gateway
+    ├── magefile.go
+    ├── cmd/golovebox/main.go
+    └── internal/
+        ├── config/         portable paths (relative to executable)
+        ├── embed/          go:embed assets, extract.go, keygen.go, cloudinit.go
+        ├── gateway/        Handler interface, Gateway router, TelegramHandler
+        ├── llm/            HTTP client, OpenAI-compat + Anthropic header, retry backoff
+        ├── setup/          7-step init wizard (idempotent)
+        └── web/
+            ├── server.go   chi router, handlers, SSE broker, WebSocket terminal
+            ├── store.go    RunStore — cancelMap, NodeLogFor, RunMeta
+            ├── nodelog.go  NodeLog — memory buffer + .jsonl append-only
+            ├── terminal.go WebSocket ↔ SSH PTY bridge
+            └── static/
+                └── index.html  Alpine.js + Cytoscape DAG + xterm.js
 ```
+
+Each module has its own `AGENTS.md` with contracts and conventions. See [Modules](#módulos) table above.
 
 ---
 
@@ -537,7 +542,7 @@ golovebox/
 
 ### V0 — Portable Coding Workflow ✅ Complete
 
-All 18 phases delivered. See [`.ai/FASES.json`](.ai/FASES.json) for the full digest of decisions, libraries, learnings, and known open issues.
+All 29 phases delivered. See [`.ai/FASES.json`](.ai/FASES.json) for the full digest of decisions, libraries, learnings, and known open issues.
 
 | Phase | Summary |
 |---|---|

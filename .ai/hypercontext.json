@@ -45,13 +45,14 @@
     "location": ".ai/ na raiz do repositório",
     "owner": "golovebox",
     "structure": {
-      ".ai/AGENTS.md": "instruções permanentes para LLM agents trabalhando no projeto",
+      ".ai/AGENTS.md": "instruções permanentes para LLM agents — router para os demais docs",
       ".ai/VISION.md": "visão de produto narrativa",
-      ".ai/hypercontext.json": "este arquivo — metadados estruturados",
+      ".ai/hypercontext.json": "este arquivo — metadados estruturados e roadmap V1",
       ".ai/FASES.json": "digest de todas as fases V0 — substitui leitura dos FASE_N.md",
       ".ai/FASE_TEMPLATE.md": "template para novas fases",
       ".ai/FASE_N.md": "fase recente em escrita ou aguardando digestão",
       ".ai/fases/": "histórico de fases já digeridas (leitura sob demanda)",
+      "promptlang/DSL.md": "spec canônica da DSL de intenção — keywords, semântica, exemplos",
       ".ai/CONTEXT.md": "(V1) contexto permanente do projeto — stack, padrões",
       ".ai/DECISIONS.md": "(V1) ADR — architecture decision records",
       ".ai/specs/<feature>.md": "(V1) spec escrita pelo golovebox antes de delegar",
@@ -100,8 +101,8 @@
   },
 
   "v0_status": {
-    "summary": "V0 completo — 18 fases. Plataforma de execução autônoma entregue.",
-    "phases_done": 18,
+    "summary": "V0 completo — 29 fases. Plataforma de execução autônoma entregue.",
+    "phases_done": 29,
     "kept": [
       "DAG orchestrator com task auto-contida — coração do produto",
       "Web UI (Alpine + Cytoscape + xterm.js + SFTP)",
