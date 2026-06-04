@@ -45,7 +45,9 @@ jobs:
       - name: product modules import only core
         run: |
           for mod in promptlang sandbox toolskills derivator orchestrator; do
-            if grep -rEq "golovebox/(promptlang|sandbox|toolskills|derivator|orchestrator|app)" $mod/ 2>/dev/null; then
+            siblings=$(echo "promptlang sandbox toolskills derivator orchestrator app" \
+              | tr ' ' '\n' | grep -vx "$mod" | paste -sd'|' -)
+            if grep -rE "golovebox/($siblings)" "$mod/" --include='*.go' 2>/dev/null; then
               echo "FAIL: $mod imports a sibling product module"
               exit 1
             fi
