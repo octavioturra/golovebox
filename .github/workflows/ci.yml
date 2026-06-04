@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  module:
+    name: "module / ${{ matrix.mod }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mod: [core, promptlang, sandbox, toolskills, derivator, orchestrator, app]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: "${{ matrix.mod }}/go.sum"
+      - name: vet + test
+        working-directory: ${{ matrix.mod }}
+        env:
+          CGO_ENABLED: "0"
+          GOWORK: "off"
+        run: |
+          go vet ./...
+          go test ./...
+
+  boundary:
+    name: "boundary / dependency invariant"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: no module imports app
+        run: |
+          ! grep -rq 'golovebox/app' core/ promptlang/ sandbox/ toolskills/ derivator/ orchestrator/
+      - name: core imports no project module
+        run: |
+          ! grep -rEq 'golovebox/(promptlang|sandbox|toolskills|derivator|orchestrator|app)' core/
+      - name: product modules import only core
+        run: |
+          for mod in promptlang sandbox toolskills derivator orchestrator; do
+            if grep -rEq "golovebox/(promptlang|sandbox|toolskills|derivator|orchestrator|app)" $mod/ 2>/dev/null; then
+              echo "FAIL: $mod imports a sibling product module"
+              exit 1
+            fi
+          done
+
+  integration:
+    name: "integration / build"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: "app/go.sum"
+      - name: build app via workspace
+        env:
+          CGO_ENABLED: "0"
+        run: cd app && go build ./...

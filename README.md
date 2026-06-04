@@ -1,6 +1,60 @@
 # golovebox
 
-Agentic workflow platform with a self-hosted web UI and VM sandbox. Describe work in plain-language Markdown specs, get a visual DAG execution plan, approve checkpoints in the browser, and receive Pull Requests — all from a **single self-contained Windows binary** with zero installation.
+Agente de coding autônomo com sandbox QEMU. Workspace Go — 7 módulos independentes. Setas de dependência só apontam para `core`.
+
+## Módulos
+
+| Módulo | O quê | Doc |
+|---|---|---|
+| `core` | Contratos e tipos de domínio. Zero deps. | [core/AGENTS.md](core/AGENTS.md) |
+| `promptlang` | DSL spec → `core.Intent` | [promptlang/AGENTS.md](promptlang/AGENTS.md) |
+| `sandbox` | Execução isolada em VM QEMU | [sandbox/AGENTS.md](sandbox/AGENTS.md) |
+| `toolskills` | Registry de skills + provisionamento | [toolskills/AGENTS.md](toolskills/AGENTS.md) |
+| `derivator` | Seed → grafo de prompts priorizados | [derivator/AGENTS.md](derivator/AGENTS.md) |
+| `orchestrator` | Engine: Intent→DAG, executor, ReAct loop | [orchestrator/AGENTS.md](orchestrator/AGENTS.md) |
+| `app` | Composition root + CLI + Web UI + gateway | [app/AGENTS.md](app/AGENTS.md) |
+
+## Regra de dependência
+
+```
+app → orchestrator → core
+app → sandbox      → core
+app → toolskills   → core
+app → derivator    → core
+app → promptlang   → core
+```
+
+Módulos de produto importam **só** `core`. `app` importa todos. Ninguém importa `app`.
+
+## Mapa de contratos
+
+Ver [core/CONTRACTS.md](core/CONTRACTS.md) — lista cada interface, quem implementa, quem consome.
+
+## Build
+
+```bash
+# binário completo (via go.work)
+cd app && CGO_ENABLED=0 mage build
+
+# compilação rápida
+cd app && go build ./...
+
+# teste isolado de um módulo
+cd <modulo> && GOWORK=off go test ./...
+
+# verificação de fronteiras
+! grep -rq 'golovebox/app' core/ promptlang/ sandbox/ toolskills/ derivator/ orchestrator/
+```
+
+## Swarm
+
+Cada módulo é uma unidade de trabalho autossuficiente. Um agente trabalha com contexto mínimo: `<modulo>/AGENTS.md` + `core/contracts.go` + arquivos do módulo.
+
+Mudança de contrato (`core`) segue protocolo aditivo — ver [core/AGENTS.md](core/AGENTS.md).
+
+---
+
+
 
 ```
 golovebox init   →   extracts QEMU, boots Alpine VM, generates SSH keys, configures

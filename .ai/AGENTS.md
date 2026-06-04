@@ -70,35 +70,26 @@ golovebox.exe
   └── Sandbox        — QEMU Alpine VM, SSH :2222 (pool com retry dial), QMP :4444
 ```
 
-## Estrutura de Pastas
+## Estrutura de Módulos (FASE 27 — workspace Go)
 
 ```
 golovebox/
-├── magefile.go
-├── cmd/golovebox/main.go
-├── internal/
-│   ├── agent/          # loop.go (ReAct + ProgressFunc 6-arg), tools.go
-│   ├── config/         # config.go — paths portáveis, WorkflowConfig
-│   ├── dag/            # dag.go (TypeSyncRepo/Branch/Push/PR + ErrNeedsHuman), executor.go, checkpoint.go
-│   ├── dsl/            # parser.go — keywords (NEW BRANCH, PUSH, PR, ATTENTION_HERE, RUN_TEST...)
-│   ├── embed/          # embed_*.go (go:embed), extract.go, cloudinit.go (credential.helper), keygen.go
-│   ├── gateway/        # gateway.go (AcquireSSH/IsVMReady), telegram.go
-│   ├── llm/            # client.go — HTTP OpenAI-compat, retry exponential backoff
-│   ├── memory/         # memory.go — chromem-go wrapper
-│   ├── orchestrator/   # orchestrator.go — specs → DAG via LLM, workflowRepo fallback
-│   ├── sandbox/        # qemu.go, qmp.go, ssh.go, pool.go (dial retry 4×)
-│   ├── setup/          # init.go — 7-step wizard
-│   ├── skills/         # registry.go, generator.go
-│   ├── tools/          # shell.go, files.go, git.go (SyncRepo/ExecBranch/ExecPush/ExecPR), github.go
-│   └── web/
-│       ├── server.go   # chi router, handlers, SSE broker, resolveRepo fallback
-│       ├── store.go    # RunStore — cancelMap, NodeLogFor, RunMeta
-│       ├── nodelog.go  # NodeLog — buffer + .jsonl (com prompt+reply)
-│       ├── terminal.go # WebSocket↔SSH PTY, SFTP file explorer
-│       └── static/
-│           └── index.html  # Alpine components + Cytoscape DAG + xterm
-└── go.mod
+├── go.work              ← workspace-only, sem go.mod
+├── core/                ← contratos, zero deps         → core/AGENTS.md
+├── promptlang/          ← DSL parser                   → promptlang/AGENTS.md
+├── sandbox/             ← VM QEMU + core.Sandbox        → sandbox/AGENTS.md
+├── toolskills/          ← skills registry + provisioner → toolskills/AGENTS.md
+├── derivator/           ← seed → PromptGraph            → derivator/AGENTS.md
+├── orchestrator/        ← Engine + dag/agent/tools/mem  → orchestrator/AGENTS.md
+└── app/                 ← composition root + UI + CLI   → app/AGENTS.md
+    ├── magefile.go
+    ├── cmd/golovebox/main.go
+    └── internal/{config,embed,gateway,llm,setup,web}/
 ```
+
+**Regra de dependência**: setas só apontam para `core`. `app` importa todos. Ninguém importa `app`.
+**Contexto por módulo**: leia `<modulo>/AGENTS.md` + `core/contracts.go`. Não precisa do resto.
+**Mapa de contratos**: `core/CONTRACTS.md` — interface → implementador → consumidores.
 
 ## Runtime — .golovebox/
 
