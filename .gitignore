@@ -23,6 +23,9 @@ build/tmp/
 # Compiled binaries.
 build/golovebox
 build/golovebox.exe
+golovebox
+
+
 
 *.qcow2
 *.img
