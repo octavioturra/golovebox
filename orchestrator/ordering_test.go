@@ -41,16 +41,37 @@ func TestEnforceWorkflowOrdering_branchBeforeEdits(t *testing.T) {
 		t.Fatalf("edit node dependencies = %v, want to include 'branch'", editNode.Dependencies)
 	}
 
-	// Push must depend on all task nodes.
-	pushNode := d.Nodes["push"]
+	// A commit node must be auto-injected before push (you can't push without
+	// committing), and it must capture the edit. Push then depends on the commit.
+	var commitNode *dag.Node
+	for _, n := range d.Nodes {
+		if n.Type == dag.TypeCommit {
+			commitNode = n
+		}
+	}
+	if commitNode == nil {
+		t.Fatal("expected an auto-injected commit node before push, found none")
+	}
 	hasEditDep := false
-	for _, dep := range pushNode.Dependencies {
+	for _, dep := range commitNode.Dependencies {
 		if dep == "edit1" {
 			hasEditDep = true
 		}
 	}
 	if !hasEditDep {
-		t.Fatalf("push node dependencies = %v, want to include 'edit1'", pushNode.Dependencies)
+		t.Fatalf("commit node dependencies = %v, want to include 'edit1'", commitNode.Dependencies)
+	}
+
+	// Push must depend on the commit node.
+	pushNode := d.Nodes["push"]
+	hasCommitDep := false
+	for _, dep := range pushNode.Dependencies {
+		if dep == commitNode.ID {
+			hasCommitDep = true
+		}
+	}
+	if !hasCommitDep {
+		t.Fatalf("push node dependencies = %v, want to include %q", pushNode.Dependencies, commitNode.ID)
 	}
 }
 

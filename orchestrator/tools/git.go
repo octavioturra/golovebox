@@ -72,6 +72,36 @@ func ExecBranch(ctx context.Context, sb core.Sandbox, clonePath, branchName stri
 	return o.Stdout, nil
 }
 
+// ExecCommit stages all changes and commits them on the current branch.
+// It is a no-op (without error) when the working tree is clean, so a push can
+// still proceed against previously committed work.
+func ExecCommit(ctx context.Context, sb core.Sandbox, clonePath, message string) (string, error) {
+	if message == "" {
+		message = "chore: golovebox automated commit"
+	}
+	// Ensure git has an identity inside the sandbox so commit doesn't fail.
+	_, _ = sb.Exec(ctx, fmt.Sprintf(
+		"cd %s && git config user.email >/dev/null 2>&1 || git config user.email golovebox@local; "+
+			"git config user.name >/dev/null 2>&1 || git config user.name golovebox",
+		clonePath,
+	))
+
+	status, _ := sb.Exec(ctx, fmt.Sprintf("cd %s && git status --porcelain", clonePath))
+	if strings.TrimSpace(status.Stdout) == "" {
+		return "nothing to commit, working tree clean", nil
+	}
+
+	safeMsg := strings.ReplaceAll(message, "'", `'\''`)
+	o, err := sb.Exec(ctx, fmt.Sprintf(
+		"cd %s && git add -A && git commit -m '%s' 2>&1",
+		clonePath, safeMsg,
+	))
+	if err != nil {
+		return o.Stdout, fmt.Errorf("git commit: %w", err)
+	}
+	return o.Stdout, nil
+}
+
 // ExecPush pushes the current branch to origin with --set-upstream.
 func ExecPush(ctx context.Context, sb core.Sandbox, token, clonePath, branch string) (string, error) {
 	askpassPath, cleanup, err := writeAskpass(ctx, sb, token)

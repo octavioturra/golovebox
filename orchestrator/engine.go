@@ -114,6 +114,19 @@ func (e *Engine) dispatch(d *dag.DAG, rc core.RunConfig, prog core.Progress) dag
 			}
 			return out, err
 
+		case dag.TypeCommit:
+			msg := node.Annotation
+			if msg == "" {
+				task := readTask(rc.WorkDir)
+				if task != "" {
+					if len(task) > 60 {
+						task = task[:60] + "..."
+					}
+					msg = "feat: " + task
+				}
+			}
+			return tools.ExecCommit(ctx, e.sb, rc.ClonePath, msg)
+
 		case dag.TypePush:
 			branch := e.getRunMeta(rc.WorkDir, "current_branch")
 			return tools.ExecPush(ctx, e.sb, rc.GitHubToken, rc.ClonePath, branch)

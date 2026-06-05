@@ -49,6 +49,7 @@ type StepKind string
 const (
 	KindBranch     StepKind = "branch"
 	KindCheckpoint StepKind = "checkpoint"
+	KindCommit     StepKind = "commit"
 	KindEdit       StepKind = "edit"
 	KindNotTodo    StepKind = "not_todo"
 	KindNotify     StepKind = "notify"

@@ -164,8 +164,8 @@ func (e *Engine) Plan(ctx context.Context, runID string, intents []core.Intent, 
 // the DAG ends up with the correct workflow node types AND the right dependency chain:
 // sync_repo → branch → edits (parallel) → push → pr.
 func enforceWorkflowOrdering(d *dag.DAG, intents []core.Intent) {
-	hasBranch, hasPush, hasPR := false, false, false
-	branchName, prTitle := "", ""
+	hasBranch, hasCommit, hasPush, hasPR := false, false, false, false
+	branchName, commitMsg, prTitle := "", "", ""
 	for _, intent := range intents {
 		for _, s := range intent.Steps {
 			switch s.Kind {
@@ -173,6 +173,11 @@ func enforceWorkflowOrdering(d *dag.DAG, intents []core.Intent) {
 				hasBranch = true
 				if branchName == "" {
 					branchName = s.Title
+				}
+			case core.KindCommit:
+				hasCommit = true
+				if commitMsg == "" {
+					commitMsg = s.Title
 				}
 			case core.KindPush:
 				hasPush = true
@@ -184,15 +189,22 @@ func enforceWorkflowOrdering(d *dag.DAG, intents []core.Intent) {
 			}
 		}
 	}
-	if !hasBranch && !hasPush && !hasPR {
+	if !hasBranch && !hasCommit && !hasPush && !hasPR {
 		return
 	}
+	// A push is impossible without a commit, so always materialize a commit step
+	// when the workflow pushes — even if the spec didn't spell out COMMIT.
+	if hasPush {
+		hasCommit = true
+	}
 
-	var branchNode, pushNode, prNode *dag.Node
+	var branchNode, commitNode, pushNode, prNode *dag.Node
 	for _, n := range d.Nodes {
 		switch n.Type {
 		case dag.TypeBranch:
 			branchNode = n
+		case dag.TypeCommit:
+			commitNode = n
 		case dag.TypePush:
 			pushNode = n
 		case dag.TypePR:
@@ -211,6 +223,14 @@ func enforceWorkflowOrdering(d *dag.DAG, intents []core.Intent) {
 				n.Annotation = branchName
 			}
 			branchNode = n
+			continue
+		}
+		if hasCommit && commitNode == nil && strings.Contains(idLower, "commit") {
+			n.Type = dag.TypeCommit
+			if n.Annotation == "" {
+				n.Annotation = commitMsg
+			}
+			commitNode = n
 			continue
 		}
 		if hasPush && pushNode == nil && strings.Contains(idLower, "push") {
@@ -249,6 +269,15 @@ func enforceWorkflowOrdering(d *dag.DAG, intents []core.Intent) {
 			_ = d.AddEdge("sync_repo", branchNode.ID)
 		}
 	}
+	if hasCommit && commitNode == nil {
+		commitNode = &dag.Node{
+			ID:         "commit_changes",
+			Type:       dag.TypeCommit,
+			Task:       "Stage and commit all changes on the current branch",
+			Annotation: commitMsg,
+		}
+		_ = d.AddNode(commitNode)
+	}
 	if hasPush && pushNode == nil {
 		pushNode = &dag.Node{
 			ID:   "push_branch",
@@ -286,7 +315,8 @@ func enforceWorkflowOrdering(d *dag.DAG, intents []core.Intent) {
 	}
 
 	isWorkflow := func(t dag.NodeType) bool {
-		return t == dag.TypeBranch || t == dag.TypePush || t == dag.TypePR || t == dag.TypeSyncRepo
+		return t == dag.TypeBranch || t == dag.TypeCommit ||
+			t == dag.TypePush || t == dag.TypePR || t == dag.TypeSyncRepo
 	}
 
 	if branchNode != nil {
@@ -298,15 +328,34 @@ func enforceWorkflowOrdering(d *dag.DAG, intents []core.Intent) {
 		}
 	}
 
-	if pushNode != nil {
+	// The commit must wait for every edit/test node so it captures all changes.
+	if commitNode != nil {
 		for _, n := range d.Nodes {
-			if n.ID == pushNode.ID || isWorkflow(n.Type) {
+			if n.ID == commitNode.ID || isWorkflow(n.Type) {
 				continue
 			}
-			addDep(n.ID, pushNode.ID)
+			addDep(n.ID, commitNode.ID)
 		}
 		if branchNode != nil {
-			addDep(branchNode.ID, pushNode.ID)
+			addDep(branchNode.ID, commitNode.ID)
+		}
+	}
+
+	if pushNode != nil {
+		switch {
+		case commitNode != nil:
+			// commit already depends on all edits; push only needs the commit.
+			addDep(commitNode.ID, pushNode.ID)
+		default:
+			for _, n := range d.Nodes {
+				if n.ID == pushNode.ID || isWorkflow(n.Type) {
+					continue
+				}
+				addDep(n.ID, pushNode.ID)
+			}
+			if branchNode != nil {
+				addDep(branchNode.ID, pushNode.ID)
+			}
 		}
 	}
 
@@ -314,6 +363,8 @@ func enforceWorkflowOrdering(d *dag.DAG, intents []core.Intent) {
 		switch {
 		case pushNode != nil:
 			addDep(pushNode.ID, prNode.ID)
+		case commitNode != nil:
+			addDep(commitNode.ID, prNode.ID)
 		case branchNode != nil:
 			addDep(branchNode.ID, prNode.ID)
 		}
@@ -331,17 +382,20 @@ Rules:
 - WHEN/DO annotations → node type "wait_event"
 - TRY/OR_ELSE annotations → node type "try_else"
 - NEW BRANCH <name> annotations → node type "branch", annotation field = branch name (NEVER type "task")
+- COMMIT ["message"] annotations → node type "commit", annotation field = commit message (NEVER type "task" — DO NOT instruct the agent to run git commit manually)
 - PUSH annotations → node type "push" (NEVER type "task" — DO NOT instruct the agent to run git push manually)
 - PR ["title"] annotations → node type "pr", annotation field = PR title (NEVER type "task")
 - NOT_TODO items must NOT appear as nodes
 
 CRITICAL ORDERING when these workflow annotations exist:
-  branch → <all edit/test/notify nodes in parallel between themselves> → push → pr
+  branch → <all edit/test/notify nodes in parallel between themselves> → commit → push → pr
   (a sync_repo step is auto-prepended by the system — do NOT include it in your plan)
+  (a commit step is auto-inserted before push by the system if you omit it — but you may include it explicitly)
   - Every edit/test node MUST depend on the branch node (do not create files outside the new branch)
-  - The push node MUST depend on every edit/test node
+  - The commit node MUST depend on every edit/test node (so it captures all changes)
+  - The push node MUST depend on the commit node (you cannot push without committing first)
   - The pr node MUST depend on the push node
-  - DO NOT use generic "task" type to represent push or pr — use the workflow types so base/head are handled correctly by the backend (otherwise PR creation fails with 422)
+  - DO NOT use generic "task" type to represent commit, push or pr — use the workflow types so the backend handles staging/base/head correctly (otherwise the push has nothing to send and PR creation fails with 422)
 
 BAD example (file edit running in parallel with branch creation — file ends up on the wrong branch):
   [{"id":"create_branch","type":"branch","dependencies":[]},
@@ -350,7 +404,8 @@ BAD example (file edit running in parallel with branch creation — file ends up
 GOOD example:
   [{"id":"create_branch","type":"branch","annotation":"feature/x","dependencies":[]},
    {"id":"create_index_html","type":"task","dependencies":["create_branch"]},
-   {"id":"push_branch","type":"push","dependencies":["create_index_html"]},
+   {"id":"commit_changes","type":"commit","annotation":"feat: x","dependencies":["create_index_html"]},
+   {"id":"push_branch","type":"push","dependencies":["commit_changes"]},
    {"id":"open_pr","type":"pr","annotation":"feat: x","dependencies":["push_branch"]}]
 - Nodes that are independent of each other must NOT have dependencies between them (they run in parallel)
 - Each node needs a clear, actionable "task" string describing exactly what the agent should do
@@ -371,7 +426,7 @@ GOOD example:
 - The GitHub token is available via GIT_ASKPASS — the agent shell tool already handles authentication
 
 Return ONLY a JSON array, no markdown fences, no explanation:
-[{"id":"string","type":"task|checkpoint|gate|notify|wait_event|try_else|branch|push|pr","task":"string","dependencies":["id",...],"annotation":"string (optional)"}]
+[{"id":"string","type":"task|checkpoint|gate|notify|wait_event|try_else|branch|commit|push|pr","task":"string","dependencies":["id",...],"annotation":"string (optional)"}]
 
 `)
 
@@ -445,7 +500,7 @@ func repoPathFromRepo(ownerRepo string) string {
 func validNodeType(t dag.NodeType) bool {
 	switch t {
 	case dag.TypeTask, dag.TypeCheckpoint, dag.TypeGate, dag.TypeNotify, dag.TypeWaitEvent, dag.TypeTryElse,
-		dag.TypeSyncRepo, dag.TypeBranch, dag.TypePush, dag.TypePR:
+		dag.TypeSyncRepo, dag.TypeBranch, dag.TypeCommit, dag.TypePush, dag.TypePR:
 		return true
 	}
 	return false

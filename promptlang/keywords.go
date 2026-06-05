@@ -16,6 +16,7 @@ const (
 	KwWhen          KeywordType = "WHEN"
 	KwDo            KeywordType = "DO"
 	KwNewBranch     KeywordType = "NEW BRANCH"
+	KwCommit        KeywordType = "COMMIT"
 	KwPush          KeywordType = "PUSH"
 	KwPR            KeywordType = "PR"
 )
@@ -37,6 +38,7 @@ var allKeywords = []KeywordType{
 	KwNotTodo,
 	KwRunTest,
 	KwOrElse,
+	KwCommit,
 	KwWhen,
 	KwPush,
 	KwTry,

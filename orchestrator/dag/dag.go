@@ -37,6 +37,7 @@ const (
 	// Workflow node types (Fase 13)
 	TypeSyncRepo NodeType = "sync_repo" // auto-injected first node when workflow.default_repo set
 	TypeBranch   NodeType = "branch"    // NEW BRANCH <name>
+	TypeCommit   NodeType = "commit"    // COMMIT ["message"] — auto-injected before push
 	TypePush     NodeType = "push"      // PUSH
 	TypePR       NodeType = "pr"        // PR ["title"]
 )
