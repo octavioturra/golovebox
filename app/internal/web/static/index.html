@@ -80,11 +80,13 @@ body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:10
 .stop-btn:hover{background:#991b1b}
 #dag-canvas{flex:1;width:100%;min-height:0;background:#0a0f1e}
 #canvas-tooltip{position:fixed;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:0.75rem;color:#e2e8f0;pointer-events:none;display:none;z-index:50;max-width:260px;word-break:break-all;white-space:pre-wrap}
-/* Node pane (bottom tab) */
-#node-pane{height:100%;display:flex;flex-direction:column;background:#0d1117}
-.np-empty{padding:14px;color:#64748b;font-size:0.78rem}
+/* Node panel (right slide-out) */
+#node-panel{position:absolute;top:0;right:0;bottom:0;width:340px;background:#1e293b;border-left:1px solid #334155;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .2s;z-index:40}
+#node-panel.open{transform:translateX(0)}
 .np-header{padding:10px 12px;border-bottom:1px solid #334155;display:flex;align-items:center;gap:8px;font-size:0.8rem}
 .np-title{font-weight:600;color:#e2e8f0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.np-close{background:none;border:none;color:#64748b;cursor:pointer;font-size:1rem;padding:0 4px}
+.np-close:hover{color:#e2e8f0}
 .np-meta{padding:8px 10px;border-bottom:1px solid #1e293b;font-size:0.73rem;color:#64748b}
 .np-meta strong{color:#94a3b8;display:block;margin-bottom:2px}
 .np-meta-val{color:#bfdbfe;font-style:italic}
@@ -102,15 +104,12 @@ body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:10
 .log-block.prompt{border-left-color:#3b82f6}
 .log-block.reply{border-left-color:#a3e635}
 .np-branch{color:#fcd34d;font-family:monospace;font-size:0.72rem}
-/* Bottom panel: terminal + file explorer + node log */
+/* Bottom panel: terminal + file explorer */
 #bottom-panel{border-top:1px solid #1e293b;display:flex;flex-direction:column;height:260px;min-height:0;background:#0d1117}
-#bottom-panel.collapsed{height:32px}
 .bottom-tabs{display:flex;align-items:center;padding:0 8px;border-bottom:1px solid #1e293b;height:32px;flex-shrink:0}
 .bottom-tab{padding:4px 12px;font-size:0.75rem;color:#64748b;cursor:pointer;border-bottom:2px solid transparent;margin-right:4px;user-select:none}
 .bottom-tab.active{color:#e2e8f0;border-bottom-color:#3b82f6}
 .bottom-tab:hover:not(.active){color:#94a3b8}
-.bottom-collapse{margin-left:auto;background:none;border:none;color:#64748b;cursor:pointer;font-size:0.9rem;line-height:1;padding:2px 8px;border-radius:4px}
-.bottom-collapse:hover{color:#e2e8f0;background:#1e293b}
 .bottom-content{flex:1;min-height:0;overflow:hidden}
 #terminal-container{width:100%;height:100%;padding:4px}
 /* File explorer */
@@ -851,32 +850,20 @@ document.addEventListener('alpine:init', () => {
     <div id="dag-canvas"></div>
     <div id="canvas-tooltip"></div>
 
-    <!-- Bottom panel: Terminal + Files + Node -->
+    <!-- Bottom panel: Terminal + Files -->
     <div id="bottom-panel"
-         :class="{collapsed: collapsed}"
-         @node-selected.window="onNodeSelected()"
          x-data="{
            tab: localStorage.getItem('glb_bottom_tab') || 'terminal',
-           collapsed: localStorage.getItem('glb_bottom_collapsed') === '1',
            setTab(t) { this.tab = t; localStorage.setItem('glb_bottom_tab', t);
-             if (this.collapsed) this.setCollapsed(false);
              if (t === 'terminal') this.$nextTick(() => this.$dispatch('terminal-show'));
              if (t === 'files')   this.$nextTick(() => this.$dispatch('files-show'));
-           },
-           setCollapsed(v) { this.collapsed = v; localStorage.setItem('glb_bottom_collapsed', v ? '1' : '0');
-             if (!v && this.tab === 'terminal') this.$nextTick(() => this.$dispatch('terminal-show'));
-           },
-           onNodeSelected() { this.setCollapsed(false); this.setTab('node'); }
+           }
          }">
       <div class="bottom-tabs">
         <div class="bottom-tab" :class="{active: tab==='terminal'}" @click="setTab('terminal')">⌨ Terminal</div>
         <div class="bottom-tab" :class="{active: tab==='files'}"    @click="setTab('files')">📁 Arquivos</div>
-        <div class="bottom-tab" :class="{active: tab==='node'}"     @click="setTab('node')">◆ Node</div>
-        <button class="bottom-collapse" @click="setCollapsed(!collapsed)"
-                :title="collapsed ? 'Expandir painel' : 'Recolher painel'"
-                x-text="collapsed ? '▴' : '▾'"></button>
       </div>
-      <div class="bottom-content" x-show="!collapsed">
+      <div class="bottom-content">
         <!-- Terminal -->
         <div x-show="tab==='terminal'" style="height:100%"
              x-data="terminalPanel"
@@ -910,19 +897,23 @@ document.addEventListener('alpine:init', () => {
             </div>
           </div>
         </div>
-        <!-- Node log -->
-        <div x-show="tab==='node'" style="height:100%"
-             x-data="nodePanel"
-             @node-selected.window="openFor($event.detail.runId, $event.detail.nodeId)"
-             @sse-node-log.window="onNodeLog($event.detail.nodeId, $event.detail.entry)"
-             @pr-opened.window="if($event.detail.runId===runId){prUrl=$event.detail.prUrl;runState='pushed'}">
-          <div id="node-pane">
-            <div class="np-header">
-              <span class="np-title" x-text="nodeId ? ('node: ' + nodeId) : 'Nenhum node selecionado'"></span>
-            </div>
-            <div class="np-empty" x-show="!nodeId">Selecione um node no DAG para ver o log.</div>
+      </div>
+    </div>
 
-      <div class="np-meta" x-show="nodeId">
+    <!-- Node log panel (right slide-out) -->
+    <div id="node-panel"
+         x-data="nodePanel"
+         :class="{open: open}"
+         @node-selected.window="openFor($event.detail.runId, $event.detail.nodeId)"
+         @sse-node-log.window="onNodeLog($event.detail.nodeId, $event.detail.entry)"
+         @pr-opened.window="if($event.detail.runId===runId){prUrl=$event.detail.prUrl;runState='pushed'}">
+
+      <div class="np-header">
+        <span class="np-title" x-text="'node: ' + (nodeId || '')"></span>
+        <button class="np-close" @click="close()">×</button>
+      </div>
+
+      <div class="np-meta">
         <div x-show="runTask">
           <strong>Objetivo do run:</strong>
           <span class="np-meta-val" x-text="runTask"></span>
@@ -951,7 +942,7 @@ document.addEventListener('alpine:init', () => {
 
       <div class="np-error" x-show="nodeError" x-text="'✗ Erro:\n' + nodeError"></div>
 
-      <div id="node-log" x-ref="logEntries" x-show="nodeId">
+      <div id="node-log" x-ref="logEntries">
         <template x-for="(e, i) in entries" :key="i">
           <div class="log-entry">
             <div class="log-hdr">
@@ -981,9 +972,7 @@ document.addEventListener('alpine:init', () => {
           </div>
         </template>
       </div>
-          </div>
-        </div>
-      </div>
+
     </div>
   </main>
 </div>
