@@ -125,6 +125,18 @@ func ExecPush(ctx context.Context, sb core.Sandbox, token, clonePath, branch str
 	return o.Stdout, nil
 }
 
+// ExecCommitPush stages all changes, commits, and pushes to origin.
+// A clean working tree is not an error — push still runs so the branch exists on remote.
+func ExecCommitPush(ctx context.Context, sb core.Sandbox, token, clonePath, branch, commitMsg string) error {
+	if _, err := ExecCommit(ctx, sb, clonePath, commitMsg); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	if _, err := ExecPush(ctx, sb, token, clonePath, branch); err != nil {
+		return fmt.Errorf("push: %w", err)
+	}
+	return nil
+}
+
 // ExecPR creates or updates a GitHub PR for the given branch.
 func ExecPR(ctx context.Context, token, owner, repo, head, base, titleParam, body string) (string, error) {
 	return ExecPRWithBase(ctx, token, owner, repo, head, base, titleParam, body, "")

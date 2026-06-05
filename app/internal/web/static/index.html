@@ -428,6 +428,8 @@ document.addEventListener('alpine:init', () => {
     nodeDesc: '',
     nodeError:'',
     branch:   '',
+    runState: '',
+    prUrl:    '',
     expanded: {},
 
     toggle(key) { this.expanded = { ...this.expanded, [key]: !this.expanded[key] }; },
@@ -447,10 +449,12 @@ document.addEventListener('alpine:init', () => {
       this.nodeId  = nodeId;
       this.open    = true;
       this.entries = [];
-      this.runTask = '';
-      this.nodeDesc= '';
+      this.runTask  = '';
+      this.nodeDesc = '';
       this.nodeError = '';
-      this.branch    = '';
+      this.branch   = '';
+      this.runState = '';
+      this.prUrl    = '';
       this.expanded  = {};
       localStorage.setItem('glb_node_id', nodeId);
 
@@ -462,6 +466,8 @@ document.addEventListener('alpine:init', () => {
         this.entries  = logData || [];
         this.runTask  = runData.task || '';
         this.branch   = runData.current_branch || '';
+        this.runState = runData.run_state || '';
+        this.prUrl    = runData.pr_url || '';
         const dagStore = Alpine.store('dag');
         const node = dagStore.data && dagStore.data.nodes && dagStore.data.nodes[nodeId];
         this.nodeDesc  = (node && (node.annotation || node.task)) || '';
@@ -526,6 +532,49 @@ document.addEventListener('alpine:init', () => {
         body:    JSON.stringify({ reason }),
       });
       window.dispatchEvent(new CustomEvent('cp-result', { detail: { nodeId: this.nodeId, approved: false } }));
+    },
+  }));
+
+  // ── prModal ──────────────────────────────────────────────
+  Alpine.data('prModal', () => ({
+    open:   false,
+    runId:  null,
+    title:  '',
+    body:   '',
+    loading:false,
+    error:  '',
+
+    async openFor(runId) {
+      this.runId   = runId;
+      this.title   = '';
+      this.body    = '';
+      this.error   = '';
+      this.loading = true;
+      this.open    = true;
+      try {
+        const s = await fetch(`/api/runs/${runId}/pr/suggest`).then(r => r.json());
+        this.title = s.title || '';
+        this.body  = s.body  || '';
+      } catch(_) {}
+      this.loading = false;
+    },
+    close() { this.open = false; },
+    async submit() {
+      if (!this.title.trim()) { this.error = 'Título obrigatório'; return; }
+      this.loading = true;
+      this.error   = '';
+      try {
+        const res = await fetch(`/api/runs/${this.runId}/pr`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ title: this.title, body: this.body }),
+        });
+        if (!res.ok) { this.error = await res.text(); this.loading = false; return; }
+        const d = await res.json();
+        window.dispatchEvent(new CustomEvent('pr-opened', { detail: { runId: this.runId, prUrl: d.pr_url } }));
+        this.close();
+      } catch(e) { this.error = e.message; }
+      this.loading = false;
     },
   }));
 
@@ -856,7 +905,8 @@ document.addEventListener('alpine:init', () => {
          x-data="nodePanel"
          :class="{open: open}"
          @node-selected.window="openFor($event.detail.runId, $event.detail.nodeId)"
-         @sse-node-log.window="onNodeLog($event.detail.nodeId, $event.detail.entry)">
+         @sse-node-log.window="onNodeLog($event.detail.nodeId, $event.detail.entry)"
+     @pr-opened.window="if($event.detail.runId===runId){prUrl=$event.detail.prUrl;runState='pushed'}"
 
       <div class="np-header">
         <span class="np-title" x-text="'node: ' + (nodeId || '')"></span>
@@ -875,6 +925,18 @@ document.addEventListener('alpine:init', () => {
         <div x-show="branch" style="margin-top:6px">
           <strong>Branch:</strong>
           <span class="np-branch" x-text="branch"></span>
+        </div>
+        <div x-show="runState" style="margin-top:6px;display:flex;align-items:center;gap:8px">
+          <span x-show="runState==='pushed'" style="background:#065f46;color:#6ee7b7;padding:2px 8px;border-radius:4px;font-size:0.72rem">✓ pushed</span>
+          <span x-show="runState==='git_error'" style="background:#7f1d1d;color:#fca5a5;padding:2px 8px;border-radius:4px;font-size:0.72rem">✗ git error</span>
+          <button x-show="runState==='pushed' && !prUrl" @click="$dispatch('open-pr-modal', {runId: runId})"
+            style="background:#1d4ed8;color:#fff;border:none;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:0.75rem">
+            Abrir PR →
+          </button>
+          <a x-show="prUrl" :href="prUrl" target="_blank"
+            style="background:#065f46;color:#6ee7b7;padding:3px 10px;border-radius:4px;font-size:0.75rem;text-decoration:none">
+            Ver PR ↗
+          </a>
         </div>
       </div>
 
@@ -913,6 +975,29 @@ document.addEventListener('alpine:init', () => {
 
     </div>
   </main>
+</div>
+
+<!-- PR modal -->
+<div x-data="prModal" @open-pr-modal.window="openFor($event.detail.runId)">
+  <div id="overlay" x-cloak x-show="open" @click="close()" style="z-index:199"></div>
+  <div x-cloak x-show="open" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    z-index:200;background:#1f2937;border:1px solid #374151;border-radius:8px;padding:24px;
+    width:min(480px,90vw);display:flex;flex-direction:column;gap:12px">
+    <h3 style="margin:0;color:#f9fafb;font-size:1rem">Abrir Pull Request</h3>
+    <input x-model="title" type="text" placeholder="Título do PR"
+      style="background:#111827;border:1px solid #374151;color:#f9fafb;padding:8px;border-radius:4px;font-size:0.9rem">
+    <textarea x-model="body" rows="5" placeholder="Descrição (opcional)"
+      style="background:#111827;border:1px solid #374151;color:#f9fafb;padding:8px;border-radius:4px;font-size:0.85rem;resize:vertical"></textarea>
+    <div x-show="error" x-text="error" style="color:#fca5a5;font-size:0.8rem"></div>
+    <div x-show="loading" style="color:#9ca3af;font-size:0.8rem">Aguardando...</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button @click="close()" style="background:#374151;color:#d1d5db;border:none;padding:6px 14px;border-radius:4px;cursor:pointer">Cancelar</button>
+      <button @click="submit()" :disabled="loading"
+        style="background:#1d4ed8;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer">
+        Confirmar →
+      </button>
+    </div>
+  </div>
 </div>
 
 <!-- Checkpoint dialog -->
@@ -1030,6 +1115,7 @@ function loadDAG(dagData) {
   const saved = loadSavedPositions(currentRunId);
 
   Object.entries(dagData.nodes || {}).forEach(([id, n]) => {
+    if (n.type === 'sync_repo') return; // infrastructure node — not shown in canvas
     const ns    = dagStore.nodes[id] || {};
     const state = ns.state || n.state || 'pending';
     const addOpts = {
@@ -1053,6 +1139,7 @@ function loadDAG(dagData) {
   });
 
   (dagData.edges || []).forEach(([from, to], i) => {
+    if (from === 'sync_repo' || to === 'sync_repo') return;
     cy.add({ group: 'edges', data: { id: `e${i}`, source: from, target: to } });
   });
 

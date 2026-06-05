@@ -34,12 +34,8 @@ const (
 	TypeWaitEvent  NodeType = "wait_event" // WHEN/DO
 	TypeTryElse    NodeType = "try_else"   // TRY/OR_ELSE
 
-	// Workflow node types (Fase 13)
 	TypeSyncRepo NodeType = "sync_repo" // auto-injected first node when workflow.default_repo set
-	TypeBranch   NodeType = "branch"    // NEW BRANCH <name>
-	TypeCommit   NodeType = "commit"    // COMMIT ["message"] — auto-injected before push
-	TypePush     NodeType = "push"      // PUSH
-	TypePR       NodeType = "pr"        // PR ["title"]
+	TypeCommit   NodeType = "commit"    // COMMIT ["message"]
 )
 
 // Node is a single unit of work in the execution graph.

@@ -145,16 +145,13 @@ func parseInto(spec *ParsedSpec) error {
 
 // noArgKeywords matches keywords that stand alone on a line (no argument or no colon required).
 var noArgKeywords = map[KeywordType]bool{
-	KwPush:   true,
 	KwCommit: true, // "COMMIT" alone → auto-generated message
 }
 
 // spaceArgKeywords matches keywords that take an argument after a space (no colon).
 var spaceArgKeywords = map[KeywordType]bool{
-	KwTry:       true,
-	KwNewBranch: true,
-	KwCommit:    true, // "COMMIT <message>"
-	KwPR:        true,
+	KwTry:    true,
+	KwCommit: true, // "COMMIT <message>"
 }
 
 // parseLine attempts to match a single trimmed line against all known keywords.

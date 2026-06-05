@@ -28,14 +28,8 @@ func ToIntent(spec *ParsedSpec) core.Intent {
 
 func annotationToStep(a Annotation) core.Step {
 	switch a.Keyword {
-	case KwNewBranch:
-		return core.Step{Kind: core.KindBranch, Title: a.Argument, Line: a.Line}
 	case KwCommit:
 		return core.Step{Kind: core.KindCommit, Title: a.Argument, Line: a.Line}
-	case KwPush:
-		return core.Step{Kind: core.KindPush, Line: a.Line}
-	case KwPR:
-		return core.Step{Kind: core.KindPR, Title: a.Argument, Line: a.Line}
 	case KwAttentionHere, KwPauseToReview:
 		return core.Step{Kind: core.KindCheckpoint, Text: a.Argument, Line: a.Line}
 	case KwRunTest:

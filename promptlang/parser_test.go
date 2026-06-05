@@ -20,23 +20,6 @@ func TestParse_Keywords(t *testing.T) {
 		wantTitle string
 	}{
 		{
-			name:      "NEW BRANCH",
-			src:       "NEW BRANCH feature/x",
-			wantKind:  core.KindBranch,
-			wantTitle: "feature/x",
-		},
-		{
-			name:     "PUSH",
-			src:      "PUSH",
-			wantKind: core.KindPush,
-		},
-		{
-			name:      "PR",
-			src:       "PR feat: add login",
-			wantKind:  core.KindPR,
-			wantTitle: "feat: add login",
-		},
-		{
 			name:     "ATTENTION_HERE",
 			src:      "ATTENTION_HERE: review before merging",
 			wantKind: core.KindCheckpoint,

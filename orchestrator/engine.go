@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,14 +26,45 @@ func (e *Engine) Approve(nodeID string) { e.cm.Approve(nodeID) }
 // Reject fails a checkpoint/blocked node with the given reason.
 func (e *Engine) Reject(nodeID, reason string) { e.cm.Reject(nodeID, reason) }
 
-// Run executes the DAG to completion. Workflow nodes (sync_repo/branch/push/pr) are
-// dispatched directly via the git/github tools; task nodes run through the ReAct loop,
-// emitting core.Progress per iteration. notify observes node state transitions
-// (SSE/CLI). dag.json/node_states.json/run_meta.json are persisted atomically in
-// rc.WorkDir by the executor.
+// Run executes the DAG to completion. Workflow nodes (sync_repo) are dispatched directly;
+// task nodes run through the ReAct loop, emitting core.Progress per iteration.
+// Branch creation happens before the DAG; commit+push happens after successful completion.
+// notify observes node state transitions (SSE/CLI).
+// dag.json/node_states.json/run_meta.json are persisted atomically in rc.WorkDir.
 func (e *Engine) Run(ctx context.Context, d *dag.DAG, rc core.RunConfig, notify dag.NotifyFunc, prog core.Progress) error {
+	// Pre-run: create branch if repo configured and no branch set yet.
+	if rc.Repo != "" && rc.CurrentBranch == "" {
+		branch := GenerateBranchName()
+		if _, err := tools.ExecBranch(ctx, e.sb, rc.ClonePath, branch); err != nil {
+			slog.Error("create branch failed", "branch", branch, "err", err)
+		} else {
+			rc.CurrentBranch = branch
+			e.setRunMeta(rc.WorkDir, "current_branch", branch)
+		}
+	}
+
 	exec := dag.NewExecutor(d, dag.ExecutorConfig{}, e.dispatch(d, rc, prog), notify, e.cm, rc.WorkDir)
-	return exec.Run(ctx)
+	if err := exec.Run(ctx); err != nil {
+		return err
+	}
+
+	// Post-run: commit+push if repo configured.
+	if rc.Repo != "" {
+		task := readTask(rc.WorkDir)
+		if len(task) > 72 {
+			task = task[:72]
+		}
+		if task == "" {
+			task = "chore: golovebox run"
+		}
+		if err := tools.ExecCommitPush(ctx, e.sb, rc.GitHubToken, rc.ClonePath, rc.CurrentBranch, task); err != nil {
+			slog.Error("git post-run failed", "run_dir", rc.WorkDir, "err", err)
+			e.setRunMeta(rc.WorkDir, "run_state", "git_error")
+			return nil
+		}
+		e.setRunMeta(rc.WorkDir, "run_state", "pushed")
+	}
+	return nil
 }
 
 // Resume loads dag.json from rc.WorkDir and re-runs interrupted nodes.
@@ -102,53 +134,6 @@ func (e *Engine) dispatch(d *dag.DAG, rc core.RunConfig, prog core.Progress) dag
 		switch node.Type {
 		case dag.TypeSyncRepo:
 			return tools.SyncRepo(ctx, e.sb, rc.GitHubToken, rc.Repo, rc.ClonePath, rc.DefaultBranch)
-
-		case dag.TypeBranch:
-			branchName := node.Annotation
-			if branchName == "" {
-				branchName = node.Task
-			}
-			out, err := tools.ExecBranch(ctx, e.sb, rc.ClonePath, branchName)
-			if err == nil {
-				e.setRunMeta(rc.WorkDir, "current_branch", branchName)
-			}
-			return out, err
-
-		case dag.TypeCommit:
-			msg := node.Annotation
-			if msg == "" {
-				task := readTask(rc.WorkDir)
-				if task != "" {
-					if len(task) > 60 {
-						task = task[:60] + "..."
-					}
-					msg = "feat: " + task
-				}
-			}
-			return tools.ExecCommit(ctx, e.sb, rc.ClonePath, msg)
-
-		case dag.TypePush:
-			branch := e.getRunMeta(rc.WorkDir, "current_branch")
-			return tools.ExecPush(ctx, e.sb, rc.GitHubToken, rc.ClonePath, branch)
-
-		case dag.TypePR:
-			parts := strings.SplitN(rc.Repo, "/", 2)
-			if len(parts) != 2 {
-				return "", fmt.Errorf("repo not set or invalid: %q", rc.Repo)
-			}
-			owner, repo := parts[0], parts[1]
-			branch := e.getRunMeta(rc.WorkDir, "current_branch")
-			task := readTask(rc.WorkDir)
-			titleParam := node.Annotation
-			if titleParam == "" {
-				t := task
-				if len(t) > 60 {
-					t = t[:60] + "..."
-				}
-				titleParam = "feat: " + t
-			}
-			body := fmt.Sprintf("## O que foi feito\n\n%s\n\n---\n*Gerado pelo golovebox run `%s`*", task, d.RunID)
-			return tools.ExecPR(ctx, rc.GitHubToken, owner, repo, branch, rc.DefaultBranch, titleParam, body)
 		}
 
 		// Default: task node runs through the ReAct loop, tagged with the node ID.

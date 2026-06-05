@@ -26,6 +26,7 @@ import (
 	"github.com/user/golovebox/app/internal/llm"
 	"github.com/user/golovebox/orchestrator"
 	"github.com/user/golovebox/orchestrator/dag"
+	orchestratortools "github.com/user/golovebox/orchestrator/tools"
 	sandboxpkg "github.com/user/golovebox/sandbox"
 	"github.com/user/golovebox/toolskills"
 )
@@ -108,6 +109,8 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 			r.Post("/approve/{nodeID}", s.handleApprove)
 			r.Post("/reject/{nodeID}", s.handleReject)
 			r.Get("/nodes/{nodeID}/log", s.handleNodeLog)
+			r.Post("/pr", s.handleOpenPR)
+			r.Get("/pr/suggest", s.handleSuggestPR)
 		})
 
 		r.Route("/skills", func(r chi.Router) {
@@ -344,6 +347,8 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		"node_states":    nodeStates,
 		"task":           s.store.ReadTask(runID),
 		"current_branch": s.store.GetRunMeta(runID, "current_branch"),
+		"run_state":      s.store.GetRunMeta(runID, "run_state"),
+		"pr_url":         s.store.GetRunMeta(runID, "pr_url"),
 	})
 }
 
@@ -620,6 +625,85 @@ func (s *Server) broadcastNodeLog(runID, nodeID string, entry NodeLogEntry) {
 		"ts":      entry.Timestamp,
 	})
 	s.broadcast(runID, string(data))
+}
+
+func (s *Server) handleOpenPR(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "id")
+	var body struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Title == "" {
+		http.Error(w, "title required", http.StatusBadRequest)
+		return
+	}
+
+	branch := s.store.GetRunMeta(runID, "current_branch")
+	if branch == "" {
+		http.Error(w, "no branch for this run", http.StatusBadRequest)
+		return
+	}
+
+	parts := strings.SplitN(resolveRepo(s.cfg), "/", 2)
+	if len(parts) != 2 {
+		http.Error(w, "repo not configured", http.StatusInternalServerError)
+		return
+	}
+	owner, repo := parts[0], parts[1]
+
+	rc := s.runConfig(s.store.RunDir(runID))
+	prURL, err := orchestratortools.ExecPR(r.Context(), rc.GitHubToken, owner, repo,
+		branch, rc.DefaultBranch, body.Title, body.Body)
+	if err != nil {
+		http.Error(w, "open PR: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.store.SetRunMeta(runID, "pr_url", prURL)
+	writeJSON(w, map[string]string{"pr_url": prURL})
+}
+
+func (s *Server) handleSuggestPR(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "id")
+	task := s.store.ReadTask(runID)
+	if task == "" {
+		writeJSON(w, map[string]string{"title": "", "body": ""})
+		return
+	}
+
+	prompt := fmt.Sprintf("Suggest a concise pull request title (max 72 chars) and a short body (2-4 bullet points) for the following task. Reply ONLY as JSON: {\"title\": \"...\", \"body\": \"...\"}.\n\nTask: %s", task)
+	reply, err := s.llmClient.Complete(r.Context(), []llm.Message{{Role: "user", Content: prompt}})
+	if err != nil {
+		t := task
+		if len(t) > 72 {
+			t = t[:72]
+		}
+		writeJSON(w, map[string]string{"title": t, "body": ""})
+		return
+	}
+
+	var suggestion struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}
+	reply = strings.TrimSpace(reply)
+	reply = strings.TrimPrefix(reply, "```json")
+	reply = strings.TrimPrefix(reply, "```")
+	reply = strings.TrimSuffix(reply, "```")
+	reply = strings.TrimSpace(reply)
+	start := strings.Index(reply, "{")
+	end := strings.LastIndex(reply, "}")
+	if start >= 0 && end > start {
+		_ = json.Unmarshal([]byte(reply[start:end+1]), &suggestion)
+	}
+	if suggestion.Title == "" {
+		t := task
+		if len(t) > 72 {
+			t = t[:72]
+		}
+		suggestion.Title = t
+	}
+	writeJSON(w, suggestion)
 }
 
 // resolveRepo returns workflow.default_repo with fallback to top-level default_repo.

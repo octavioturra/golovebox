@@ -15,10 +15,7 @@ const (
 	KwRunTest       KeywordType = "RUN_TEST"
 	KwWhen          KeywordType = "WHEN"
 	KwDo            KeywordType = "DO"
-	KwNewBranch     KeywordType = "NEW BRANCH"
 	KwCommit        KeywordType = "COMMIT"
-	KwPush          KeywordType = "PUSH"
-	KwPR            KeywordType = "PR"
 )
 
 // CheckpointKeywords marks keywords that produce a checkpoint (human-gate) DAG node.
@@ -32,7 +29,6 @@ var CheckpointKeywords = map[KeywordType]bool{
 var allKeywords = []KeywordType{
 	KwAttentionHere,
 	KwPauseToReview,
-	KwNewBranch, // "NEW BRANCH" before single-word keywords
 	KwNotifyMe,
 	KwNoRetry,
 	KwNotTodo,
@@ -40,8 +36,6 @@ var allKeywords = []KeywordType{
 	KwOrElse,
 	KwCommit,
 	KwWhen,
-	KwPush,
 	KwTry,
 	KwDo,
-	KwPR,
 }

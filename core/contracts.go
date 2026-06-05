@@ -47,14 +47,11 @@ type Step struct {
 type StepKind string
 
 const (
-	KindBranch     StepKind = "branch"
 	KindCheckpoint StepKind = "checkpoint"
 	KindCommit     StepKind = "commit"
 	KindEdit       StepKind = "edit"
 	KindNotTodo    StepKind = "not_todo"
 	KindNotify     StepKind = "notify"
-	KindPR         StepKind = "pr"
-	KindPush       StepKind = "push"
 	KindTest       StepKind = "test"
 	KindTryElse    StepKind = "try_else"
 	KindWait       StepKind = "wait"
@@ -135,4 +132,5 @@ type RunConfig struct {
 	WorkDir       string // run directory, e.g. .golovebox/runs/<id>/
 	ClonePath     string // repo path inside the VM, e.g. /root/repo
 	RunMode       string // "build_only" restricts the planning prompt; "" = unrestricted
+	CurrentBranch string // set by Engine after creating branch at start of run
 }
