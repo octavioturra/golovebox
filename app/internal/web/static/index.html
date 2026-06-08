@@ -985,9 +985,9 @@ document.addEventListener('alpine:init', () => {
     width:min(480px,90vw);display:flex;flex-direction:column;gap:12px">
     <h3 style="margin:0;color:#f9fafb;font-size:1rem">Abrir Pull Request</h3>
     <input x-model="title" type="text" placeholder="Título do PR"
-      style="background:#111827;border:1px solid #374151;color:#f9fafb;padding:8px;border-radius:4px;font-size:0.9rem">
+      style="width:100%;display:block;background:#111827;border:1px solid #374151;color:#f9fafb;padding:8px;border-radius:4px;font-size:0.9rem">
     <textarea x-model="body" rows="5" placeholder="Descrição (opcional)"
-      style="background:#111827;border:1px solid #374151;color:#f9fafb;padding:8px;border-radius:4px;font-size:0.85rem;resize:vertical"></textarea>
+      style="width:100%;display:block;background:#111827;border:1px solid #374151;color:#f9fafb;padding:8px;border-radius:4px;font-size:0.85rem;resize:vertical"></textarea>
     <div x-show="error" x-text="error" style="color:#fca5a5;font-size:0.8rem"></div>
     <div x-show="loading" style="color:#9ca3af;font-size:0.8rem">Aguardando...</div>
     <div style="display:flex;gap:8px;justify-content:flex-end">

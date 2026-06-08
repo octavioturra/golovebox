@@ -174,6 +174,21 @@ Rules:
   before and after the DAG runs. Do NOT include branch, commit, push, or PR nodes in your plan.
   The agent already operates on the correct branch — focus only on the actual work.
 
+- DECOMPOSE complex objectives into MULTIPLE interdependent nodes. If the goal has several distinct
+  deliverables or concerns (e.g. structure/markup, each separate validation, an integration, styling,
+  tests), produce one node per concern — do NOT return a single monolithic node for a complex task.
+  A node should be a focused, independently-describable unit of work. Trivial single-step goals may stay
+  as one node, but anything with multiple requirements should be split.
+- SAME-FILE rule: if more than one node modifies the SAME file, they MUST run sequentially via
+  "dependencies" (never in parallel on that file), and each such node's "task" MUST instruct the agent
+  to FIRST read the current file content and then make an incremental edit that PRESERVES everything
+  already there. Never have two parallel nodes write the same file.
+  Example decomposition for "create form.html with CPF + 18+ date validation, HTMX POST, Bulma layout":
+  [{"id":"scaffold_form_html","type":"task","task":"Create /root/repo/form.html ... full Bulma+HTMX skeleton ...","dependencies":[]},
+   {"id":"add_cpf_validation","type":"task","task":"Read /root/repo/form.html, then add CPF format+checksum validation, preserving existing markup ...","dependencies":["scaffold_form_html"]},
+   {"id":"add_age_validation","type":"task","task":"Read /root/repo/form.html, then enforce birth date >= 18 years, preserving existing markup ...","dependencies":["add_cpf_validation"]},
+   {"id":"wire_htmx_post","type":"task","task":"Read /root/repo/form.html, then wire the HTMX POST to /data, preserving existing markup ...","dependencies":["add_age_validation"]}]
+
 - Nodes that are independent of each other must NOT have dependencies between them (they run in parallel)
 - Each node needs a clear, actionable "task" string describing exactly what the agent should do
 - The "task" field is the FULL prompt the agent receives — it MUST be self-contained. Restate the user's

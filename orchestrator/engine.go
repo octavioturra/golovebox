@@ -32,15 +32,14 @@ func (e *Engine) Reject(nodeID, reason string) { e.cm.Reject(nodeID, reason) }
 // notify observes node state transitions (SSE/CLI).
 // dag.json/node_states.json/run_meta.json are persisted atomically in rc.WorkDir.
 func (e *Engine) Run(ctx context.Context, d *dag.DAG, rc core.RunConfig, notify dag.NotifyFunc, prog core.Progress) error {
-	// Pre-run: create branch if repo configured and no branch set yet.
+	// Pre-run: reserve a feature branch name when a repo is configured. The branch
+	// itself is created inside the sync_repo node (after the clone exists) — creating
+	// it here would fail because rc.ClonePath isn't a git repo yet. Generating the
+	// name now guarantees the same value is seen by sync_repo (create) and the
+	// post-DAG push, since both read this rc copy.
 	if rc.Repo != "" && rc.CurrentBranch == "" {
-		branch := GenerateBranchName()
-		if _, err := tools.ExecBranch(ctx, e.sb, rc.ClonePath, branch); err != nil {
-			slog.Error("create branch failed", "branch", branch, "err", err)
-		} else {
-			rc.CurrentBranch = branch
-			e.setRunMeta(rc.WorkDir, "current_branch", branch)
-		}
+		rc.CurrentBranch = GenerateBranchName()
+		e.setRunMeta(rc.WorkDir, "current_branch", rc.CurrentBranch)
 	}
 
 	exec := dag.NewExecutor(d, dag.ExecutorConfig{}, e.dispatch(d, rc, prog), notify, e.cm, rc.WorkDir)
@@ -50,6 +49,13 @@ func (e *Engine) Run(ctx context.Context, d *dag.DAG, rc core.RunConfig, notify 
 
 	// Post-run: commit+push if repo configured.
 	if rc.Repo != "" {
+		// Never push without a feature branch — guard against the dangerous
+		// "git push current branch" fallback that could land work on the default branch.
+		if rc.CurrentBranch == "" {
+			slog.Error("no feature branch — skipping push", "run_dir", rc.WorkDir)
+			e.setRunMeta(rc.WorkDir, "run_state", "git_error")
+			return nil
+		}
 		task := readTask(rc.WorkDir)
 		if len(task) > 72 {
 			task = task[:72]
@@ -133,7 +139,22 @@ func (e *Engine) dispatch(d *dag.DAG, rc core.RunConfig, prog core.Progress) dag
 	return func(ctx context.Context, node *dag.Node) (string, error) {
 		switch node.Type {
 		case dag.TypeSyncRepo:
-			return tools.SyncRepo(ctx, e.sb, rc.GitHubToken, rc.Repo, rc.ClonePath, rc.DefaultBranch)
+			out, err := tools.SyncRepo(ctx, e.sb, rc.GitHubToken, rc.Repo, rc.ClonePath, rc.DefaultBranch)
+			if err != nil {
+				return out, err
+			}
+			// First real action of every run: branch off the freshly-synced repo so
+			// all work happens on the feature branch, never on the default branch.
+			// Fail loud — if the branch can't be created, the DAG must stop before
+			// any work node runs, so nothing gets pushed to the wrong branch.
+			if rc.CurrentBranch != "" {
+				bout, berr := tools.ExecBranch(ctx, e.sb, rc.ClonePath, rc.CurrentBranch)
+				if berr != nil {
+					return out + "\n" + bout, fmt.Errorf("create branch %s: %w", rc.CurrentBranch, berr)
+				}
+				return out + "\n" + bout, nil
+			}
+			return out, nil
 		}
 
 		// Default: task node runs through the ReAct loop, tagged with the node ID.
