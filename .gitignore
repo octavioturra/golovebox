@@ -5,14 +5,14 @@
 
 # Downloaded QEMU binaries and Alpine ISO (populated by "mage fetch").
 # placeholder.txt files ARE committed — they let go:embed compile without real assets.
-internal/embed/assets/qemu/windows-amd64/*
-!internal/embed/assets/qemu/windows-amd64/placeholder.txt
-internal/embed/assets/qemu/linux-amd64/*
-!internal/embed/assets/qemu/linux-amd64/placeholder.txt
-internal/embed/assets/qemu/darwin-arm64/*
-!internal/embed/assets/qemu/darwin-arm64/placeholder.txt
-internal/embed/assets/alpine/*
-!internal/embed/assets/alpine/placeholder.txt
+app/internal/embed/assets/qemu/windows-amd64/*
+app/!internal/embed/assets/qemu/windows-amd64/placeholder.txt
+app/internal/embed/assets/qemu/linux-amd64/*
+app/!internal/embed/assets/qemu/linux-amd64/placeholder.txt
+app/internal/embed/assets/qemu/darwin-arm64/*
+app/!internal/embed/assets/qemu/darwin-arm64/placeholder.txt
+app/internal/embed/assets/alpine/*
+app/!internal/embed/assets/alpine/placeholder.txt
 
 build/
 
@@ -23,8 +23,13 @@ build/tmp/
 # Compiled binaries.
 build/golovebox
 build/golovebox.exe
+golovebox
+
+
 
 *.qcow2
 *.img
 *.iso
+.claude/
+
 config.toml

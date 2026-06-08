@@ -30,75 +30,26 @@ V1 (em planejamento) promove golovebox a **TechLead** — especifica, delega par
 - Sem escrita fora de `baseDir`
 - Build: `mage build` — nunca `go build` direto
 
-## Stack Backend (pure Go, zero CGO)
-
-| Camada | Lib |
-|---|---|
-| CLI | `spf13/cobra` |
-| Config | `BurntSushi/toml` |
-| HTTP router | `go-chi/chi/v5` — sub-routers, middleware Recoverer |
-| Logging | `log/slog` stdlib — text em dev, json no daemon |
-| SSH + SFTP | `golang.org/x/crypto/ssh` + `pkg/sftp` |
-| QEMU controle | `internal/sandbox/qmp.go` — QMP TCP direto |
-| Memória vetorial | `philippgille/chromem-go` |
-| GitHub | `google/go-github/v60` |
-| Cloud-init ISO | `github.com/kdomanski/iso9660` |
-| Build | `github.com/magefile/mage` |
-| Telegram | `go-telegram-bot-api/telegram-bot-api/v5` |
-| WebSocket | `github.com/gorilla/websocket` |
-
-## Stack Frontend (CDN, sem build step)
-
-| Camada | Lib |
-|---|---|
-| Reatividade | Alpine.js v3 |
-| DAG visual | Cytoscape.js v3 + cytoscape-dagre |
-| Markdown | marked.js |
-| Syntax highlight | highlight.js |
-| Terminal | xterm.js v5 + xterm-addon-fit |
-
-## Arquitetura
-
-```
-golovebox.exe
-  ├── Gateway        — Telegram, CLI
-  ├── Agent Loop     — ReAct: Thought/Action/Parameters/Observation (texto puro, heredoc <<EOF)
-  ├── Tools          — shell, files, github (GIT_ASKPASS + credential.helper), list_dir, git ops
-  ├── Orchestrator   — specs DSL → DAG JSON via LLM (IDs snake_case, task auto-contida)
-  ├── Memory         — chromem-go em .golovebox/memory/
-  ├── Web UI         — chi + SSE + WebSocket + embed.FS; Alpine.js + Cytoscape + xterm.js
-  └── Sandbox        — QEMU Alpine VM, SSH :2222 (pool com retry dial), QMP :4444
-```
-
-## Estrutura de Pastas
+## Estrutura de Módulos (workspace Go)
 
 ```
 golovebox/
-├── magefile.go
-├── cmd/golovebox/main.go
-├── internal/
-│   ├── agent/          # loop.go (ReAct + ProgressFunc 6-arg), tools.go
-│   ├── config/         # config.go — paths portáveis, WorkflowConfig
-│   ├── dag/            # dag.go (TypeSyncRepo/Branch/Push/PR + ErrNeedsHuman), executor.go, checkpoint.go
-│   ├── dsl/            # parser.go — keywords (NEW BRANCH, PUSH, PR, ATTENTION_HERE, RUN_TEST...)
-│   ├── embed/          # embed_*.go (go:embed), extract.go, cloudinit.go (credential.helper), keygen.go
-│   ├── gateway/        # gateway.go (AcquireSSH/IsVMReady), telegram.go
-│   ├── llm/            # client.go — HTTP OpenAI-compat, retry exponential backoff
-│   ├── memory/         # memory.go — chromem-go wrapper
-│   ├── orchestrator/   # orchestrator.go — specs → DAG via LLM, workflowRepo fallback
-│   ├── sandbox/        # qemu.go, qmp.go, ssh.go, pool.go (dial retry 4×)
-│   ├── setup/          # init.go — 7-step wizard
-│   ├── skills/         # registry.go, generator.go
-│   ├── tools/          # shell.go, files.go, git.go (SyncRepo/ExecBranch/ExecPush/ExecPR), github.go
-│   └── web/
-│       ├── server.go   # chi router, handlers, SSE broker, resolveRepo fallback
-│       ├── store.go    # RunStore — cancelMap, NodeLogFor, RunMeta
-│       ├── nodelog.go  # NodeLog — buffer + .jsonl (com prompt+reply)
-│       ├── terminal.go # WebSocket↔SSH PTY, SFTP file explorer
-│       └── static/
-│           └── index.html  # Alpine components + Cytoscape DAG + xterm
-└── go.mod
+├── go.work              ← workspace-only, sem go.mod
+├── core/                ← contratos, zero deps         → core/AGENTS.md
+├── promptlang/          ← DSL parser                   → promptlang/AGENTS.md
+├── sandbox/             ← VM QEMU + core.Sandbox        → sandbox/AGENTS.md
+├── toolskills/          ← skills registry + provisioner → toolskills/AGENTS.md
+├── derivator/           ← seed → PromptGraph            → derivator/AGENTS.md
+├── orchestrator/        ← Engine + dag/agent/tools/mem  → orchestrator/AGENTS.md
+└── app/                 ← composition root + UI + CLI   → app/AGENTS.md
+    ├── magefile.go
+    ├── cmd/golovebox/main.go
+    └── internal/{config,embed,gateway,llm,setup,web}/
 ```
+
+**Regra de dependência**: setas só apontam para `core`. `app` importa todos. Ninguém importa `app`.
+**Contexto por módulo**: leia `<modulo>/AGENTS.md` + `core/contracts.go`. Não precisa do resto.
+**Mapa de contratos**: `core/CONTRACTS.md` — interface → implementador → consumidores.
 
 ## Runtime — .golovebox/
 
@@ -146,22 +97,11 @@ type ProgressFunc func(iter int, action, params, obs, prompt, reply string)
 
 ## Decisões Vivas
 
-Promovidas pra `FASES.json:enduring_decisions`. Resumo do que é mais usado:
-
-- **Cytoscape, não Mermaid**: updates incrementais via `.data()` sem re-render
-- **Alpine, não htmx**: backend retorna JSON, não HTML fragments
-- **chi**: sub-routers, Recoverer, pronto pra WebSocket/SFTP
-- **slog stdlib**: zero deps, JSON no daemon
-- **QEMU weilnetz.de**: única fonte Windows com todas DLLs
-- **Alpine NoCloud qcow2**: boot direto, sem install (eliminou 10min de wait)
-- **HTTP próprio para LLM**: BaseURL swappável, zero provider lock-in
-- **MD-first memory**: .ai/ é fonte de verdade, vetores derivados
-- **Credential helper persistente**: cloud-init + ~/.git-credentials — `git push` via shell tool funciona sem GIT_ASKPASS
-- **Pool dial retry**: handshake fresco durante `rc-service sshd restart` precisa de retry, não só keepalive idle
+Promovidas para `FASES.json:enduring_decisions`. Leia diretamente de lá.
 
 ## Status das Fases
 
-V0 completo (1-18). Detalhes em `FASES.json:phases.v0_done`.
+V0 completo (1-29). Detalhes em `FASES.json:phases.v0_done`.
 V1 em planejamento (5 fases). Detalhes em `FASES.json:phases.v1_planned`.
 
 ## Workflow de Documentação
@@ -177,3 +117,17 @@ V1 em planejamento (5 fases). Detalhes em `FASES.json:phases.v1_planned`.
 - Código limpo, DRY, KISS, YAGNI
 - Quando criar arquivo: cria, não explica
 - Quando editar: edita, não narra
+
+## Regra de Documentação
+
+Cada fato vive em **um único lugar**. Outros documentos linkam, nunca copiam.
+
+| Tipo de informação | Dono |
+|---|---|
+| Fato vivo (decisão, lib, aprendizado) | `FASES.json` |
+| Direção de produto e V1 | `hypercontext.json` |
+| Spec de módulo (contrato, API) | `<módulo>/AGENTS.md` |
+| DSL keywords e semântica | `promptlang/DSL.md` |
+| Arquitetura de módulos | `README.md` |
+| Narrativa de produto | `VISION.md` |
+| Requisitos funcionais | `PRD.md` |

@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    - cron: "0 3 * * *"  # nightly 03:00 UTC
+
+jobs:
+  # ── Trilho FAST (bloqueia merge) ──────────────────────────────────────────
+  module:
+    name: "fast / module / ${{ matrix.mod }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mod: [core, promptlang, sandbox, toolskills, derivator, orchestrator, app]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: "${{ matrix.mod }}/go.sum"
+      - name: vet + test (unit, no resource)
+        working-directory: ${{ matrix.mod }}
+        env:
+          CGO_ENABLED: "0"
+          GOWORK: "off"
+        run: |
+          go vet ./...
+          go test -short ./...
+
+  boundary:
+    name: "fast / boundary / dependency invariant"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: no module imports app
+        run: |
+          ! grep -rq 'golovebox/app' core/ promptlang/ sandbox/ toolskills/ derivator/ orchestrator/
+      - name: core imports no project module
+        run: |
+          ! grep -rEq 'golovebox/(promptlang|sandbox|toolskills|derivator|orchestrator|app)' core/
+      - name: product modules import only core
+        run: |
+          for mod in promptlang sandbox toolskills derivator orchestrator; do
+            siblings=$(echo "promptlang sandbox toolskills derivator orchestrator app" \
+              | tr ' ' '\n' | grep -vx "$mod" | paste -sd'|' -)
+            if grep -rE "golovebox/($siblings)" "$mod/" --include='*.go' 2>/dev/null; then
+              echo "FAIL: $mod imports a sibling product module"
+              exit 1
+            fi
+          done
+
+  integration-build:
+    name: "fast / integration / build via workspace"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: "app/go.sum"
+      - name: go build (workspace)
+        env:
+          CGO_ENABLED: "0"
+        run: cd app && go build ./...
+
+  # ── Trilho HEAVY (alerta, não bloqueia merge) ────────────────────────────
+  integration-sandbox:
+    name: "heavy / sandbox / QEMU integration"
+    if: |
+      github.event_name == 'schedule' ||
+      contains(github.event.pull_request.labels.*.name, 'test:heavy') ||
+      (github.event_name == 'push' && contains(github.event.head_commit.modified, 'sandbox/'))
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: "sandbox/go.sum"
+      - name: install QEMU (KVM)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y qemu-system-x86 qemu-utils
+      - name: sandbox integration tests
+        working-directory: sandbox
+        env:
+          CGO_ENABLED: "0"
+          GOWORK: "off"
+        run: go test -tags integration -timeout 10m ./...
+
+  integration-e2e:
+    name: "heavy / e2e / full run"
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: "app/go.sum"
+      - name: install QEMU (KVM)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y qemu-system-x86 qemu-utils
+      - name: e2e test
+        working-directory: app
+        env:
+          CGO_ENABLED: "0"
+          GLB_LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          GLB_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: go test -tags e2e -timeout 20m ./...

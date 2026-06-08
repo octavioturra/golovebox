@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>golovebox</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<style>
+[x-cloak]{display:none!important}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:100vh;overflow:hidden}
+#app{display:flex;height:100vh}
+/* Chat */
+#chat{width:380px;min-width:280px;display:flex;flex-direction:column;border-right:1px solid #1e293b;background:#1e293b}
+#chat-header{padding:12px 16px;border-bottom:1px solid #334155;display:flex;align-items:center;gap:8px}
+#chat-header h1{font-size:1rem;font-weight:600;color:#f8fafc;flex:1}
+.chat-clear{background:none;border:none;color:#64748b;cursor:pointer;font-size:0.85rem;padding:2px 6px;border-radius:4px}
+.chat-clear:hover{color:#e2e8f0;background:#334155}
+.status-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;flex-shrink:0}
+.status-dot.red{background:#ef4444}
+/* Health */
+#health-panel{padding:8px 16px;border-bottom:1px solid #334155;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.h-indicator{font-size:0.75rem;display:flex;align-items:center;gap:3px;cursor:default}
+.h-dot{font-size:1rem;line-height:1;color:#9ca3af;transition:color .2s}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.h-dot.checking{animation:pulse 1s infinite}
+.vm-timer{font-family:monospace;font-size:0.7rem;color:#fbbf24;margin-left:2px}
+#health-refresh{margin-left:auto;background:none;border:none;color:#64748b;cursor:pointer;font-size:0.8rem;padding:2px 4px;border-radius:4px}
+#health-refresh:hover{color:#e2e8f0;background:#334155}
+/* Messages */
+#messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+.msg{padding:8px 12px;border-radius:8px;font-size:0.8rem;line-height:1.5;word-break:break-word}
+.msg.system{background:#0f172a;color:#94a3b8}
+.msg.agent{background:#1e3a5f;color:#bfdbfe}
+.msg.ok{background:#14532d;color:#86efac}
+.msg.err{background:#450a0a;color:#fca5a5}
+.msg.warn{background:#431407;color:#fed7aa}
+.msg.task{background:#1c1f3a;border-left:2px solid #3b82f6;color:#bfdbfe;font-style:italic}
+.msg-detail{font-size:0.7rem;color:#f87171;margin-top:4px;font-family:monospace}
+/* markdown inside messages */
+.msg p{margin:0 0 4px}
+.msg p:last-child{margin:0}
+.msg code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-family:monospace;font-size:0.75rem}
+.msg pre{background:rgba(0,0,0,.3);padding:8px;border-radius:6px;overflow-x:auto;margin:4px 0}
+.msg pre code{background:none;padding:0}
+/* Upload */
+#upload-area{padding:12px;border-top:1px solid #334155}
+#upload-area label{display:block;font-size:0.75rem;color:#94a3b8;margin-bottom:6px}
+#drop-zone{border:2px dashed #334155;border-radius:8px;padding:16px;text-align:center;cursor:pointer;font-size:0.8rem;color:#64748b;transition:border-color .2s}
+#drop-zone:hover,#drop-zone.drag{border-color:#3b82f6;color:#93c5fd}
+.file-list{margin-top:6px;font-size:0.75rem;color:#64748b}
+/* Task */
+#task-area{padding:0 12px 12px}
+#task-area label{display:block;font-size:0.75rem;color:#94a3b8;margin-bottom:4px}
+.task-ta{width:100%;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:8px;resize:vertical;font-family:inherit}
+.task-ta:focus{outline:none;border-color:#3b82f6}
+.btn-primary{width:100%;margin-top:6px;padding:8px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:500}
+.btn-primary:hover{background:#1d4ed8}
+.btn-primary:disabled{background:#334155;cursor:not-allowed;color:#64748b}
+/* Runs */
+#runs-panel{padding:12px;border-top:1px solid #334155;min-height:0}
+#runs-panel h2{font-size:0.75rem;color:#94a3b8;margin-bottom:6px}
+#runs-list{display:flex;flex-direction:column;gap:4px;max-height:140px;overflow-y:auto}
+.run-item{padding:6px 8px;border-radius:6px;background:#0f172a;cursor:pointer;font-size:0.75rem}
+.run-item:hover{background:#1e3a5f}
+.run-item.active{border-left:2px solid #3b82f6}
+.run-row{display:flex;justify-content:space-between;align-items:center}
+.run-preview{font-size:0.65rem;color:#64748b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge{padding:2px 6px;border-radius:9999px;font-size:0.65rem;font-weight:600}
+.badge.done{background:#14532d;color:#86efac}
+.badge.running{background:#78350f;color:#fcd34d}
+.badge.error{background:#450a0a;color:#fca5a5}
+/* DAG */
+#dag-panel{flex:1;display:flex;flex-direction:column;overflow:hidden;position:relative}
+#dag-header{padding:10px 16px;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:8px;font-size:0.8rem;color:#94a3b8}
+#run-label{font-weight:600;color:#e2e8f0}
+.dag-relayout{margin-left:auto;padding:4px 10px;background:transparent;color:#64748b;border:1px solid #334155;border-radius:6px;cursor:pointer;font-size:0.7rem}
+.dag-relayout:hover{color:#e2e8f0;border-color:#475569;background:#1e293b}
+.stop-btn{margin-left:8px;padding:4px 10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:6px;cursor:pointer;font-size:0.75rem}
+.stop-btn:hover{background:#991b1b}
+#dag-canvas{flex:1;width:100%;min-height:0;background:#0a0f1e}
+#canvas-tooltip{position:fixed;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:0.75rem;color:#e2e8f0;pointer-events:none;display:none;z-index:50;max-width:260px;word-break:break-all;white-space:pre-wrap}
+/* Node panel (right slide-out) */
+#node-panel{position:absolute;top:0;right:0;bottom:0;width:340px;background:#1e293b;border-left:1px solid #334155;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .2s;z-index:40}
+#node-panel.open{transform:translateX(0)}
+.np-header{padding:10px 12px;border-bottom:1px solid #334155;display:flex;align-items:center;gap:8px;font-size:0.8rem}
+.np-title{font-weight:600;color:#e2e8f0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.np-close{background:none;border:none;color:#64748b;cursor:pointer;font-size:1rem;padding:0 4px}
+.np-close:hover{color:#e2e8f0}
+.np-meta{padding:8px 10px;border-bottom:1px solid #1e293b;font-size:0.73rem;color:#64748b}
+.np-meta strong{color:#94a3b8;display:block;margin-bottom:2px}
+.np-meta-val{color:#bfdbfe;font-style:italic}
+.np-error{margin:8px 10px;padding:8px;background:#450a0a;border-radius:6px;font-size:0.73rem;color:#fca5a5;font-family:monospace;white-space:pre-wrap;word-break:break-all}
+#node-log{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;font-size:0.75rem}
+.log-entry{background:#0f172a;border-radius:6px;padding:8px;border-left:2px solid #334155}
+.log-hdr{color:#64748b;margin-bottom:4px;font-size:0.7rem;display:flex;justify-content:space-between}
+.log-param{color:#93c5fd;font-family:monospace;white-space:pre-wrap;word-break:break-all;margin-bottom:2px}
+.log-obs{color:#a3e635;overflow-x:auto}
+/* hljs inside log-obs: override light colors to match dark theme */
+.log-obs .hljs{background:transparent;color:#a3e635;padding:0}
+.log-toggle{cursor:pointer;color:#64748b;font-size:0.7rem;margin:2px 0;user-select:none;display:flex;align-items:center;gap:4px}
+.log-toggle:hover{color:#94a3b8}
+.log-block{background:#020617;border-radius:4px;padding:6px 8px;margin:2px 0 6px;font-family:monospace;font-size:0.7rem;white-space:pre-wrap;word-break:break-word;max-height:240px;overflow-y:auto;color:#cbd5e1;border-left:2px solid #1e293b}
+.log-block.prompt{border-left-color:#3b82f6}
+.log-block.reply{border-left-color:#a3e635}
+.np-branch{color:#fcd34d;font-family:monospace;font-size:0.72rem}
+/* Bottom panel: terminal + file explorer */
+#bottom-panel{border-top:1px solid #1e293b;display:flex;flex-direction:column;height:260px;min-height:0;background:#0d1117}
+.bottom-tabs{display:flex;align-items:center;padding:0 8px;border-bottom:1px solid #1e293b;height:32px;flex-shrink:0}
+.bottom-tab{padding:4px 12px;font-size:0.75rem;color:#64748b;cursor:pointer;border-bottom:2px solid transparent;margin-right:4px;user-select:none}
+.bottom-tab.active{color:#e2e8f0;border-bottom-color:#3b82f6}
+.bottom-tab:hover:not(.active){color:#94a3b8}
+.bottom-content{flex:1;min-height:0;overflow:hidden}
+#terminal-container{width:100%;height:100%;padding:4px}
+/* File explorer */
+#file-explorer{height:100%;display:flex;flex-direction:column;font-size:0.78rem}
+.file-toolbar{display:flex;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid #1e293b;flex-shrink:0}
+.file-path{flex:1;color:#94a3b8;font-family:monospace;font-size:0.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-toolbar button{background:none;border:none;color:#64748b;cursor:pointer;font-size:0.85rem;padding:2px 4px;border-radius:3px}
+.file-toolbar button:hover{color:#e2e8f0;background:#1e293b}
+.file-toolbar button:disabled{color:#334155;cursor:not-allowed}
+.file-entries{flex:1;overflow-y:auto;padding:4px 0}
+.file-entry{display:flex;align-items:center;gap:6px;padding:3px 10px;cursor:pointer;user-select:none}
+.file-entry:hover{background:#1e293b}
+.file-entry .fe-icon{flex-shrink:0;font-size:0.85rem}
+.file-entry .fe-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-entry .fe-name.dir{color:#93c5fd;font-weight:500}
+.file-entry .fe-name.file{color:#e2e8f0}
+.file-entry .fe-size{color:#64748b;font-size:0.68rem;flex-shrink:0}
+.file-loading{padding:8px 10px;color:#64748b;font-size:0.75rem}
+/* Checkpoint */
+#overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99}
+#cp-dialog{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;min-width:360px;z-index:100;box-shadow:0 25px 50px rgba(0,0,0,.5)}
+#cp-dialog h3{font-size:0.95rem;margin-bottom:8px;color:#f8fafc}
+#cp-dialog p{font-size:0.8rem;color:#94a3b8;margin-bottom:16px}
+.cp-btns{display:flex;gap:8px}
+.cp-approve{flex:1;padding:8px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:500}
+.cp-reject{flex:1;padding:8px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:500}
+.cp-reason{width:100%;padding:6px 8px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.8rem;margin-bottom:8px}
+</style>
+
+<script>
+document.addEventListener('alpine:init', () => {
+
+  // ── Shared stores ────────────────────────────────────────
+  Alpine.store('session', {
+    runId:   null,
+    running: false,
+    connOk:  true,
+  });
+
+  Alpine.store('dag', {
+    data:  null,
+    nodes: {},
+    reset() {
+      this.data  = null;
+      this.nodes = {};
+    },
+    update(id, state, error) {
+      this.nodes = {
+        ...this.nodes,
+        [id]: { ...(this.nodes[id] || {}), state, error: error || '' },
+      };
+    },
+    setIter(id, iter) {
+      this.nodes = {
+        ...this.nodes,
+        [id]: { ...(this.nodes[id] || {}), iterCount: iter },
+      };
+    },
+  });
+
+  // ── healthPanel ──────────────────────────────────────────
+  Alpine.data('healthPanel', () => ({
+    loading: false,
+    _vmWasOk: false,
+    checks: {
+      vm:     { ok: null, msg: '', boot_elapsed_secs: 0 },
+      llm:    { ok: null, msg: '' },
+      github: { ok: null, msg: '' },
+      repo:   { ok: null, msg: '' },
+    },
+    async check() {
+      this.loading = true;
+      try {
+        const data = await fetch('/api/health').then(r => r.json());
+        this.checks = data;
+        const vmOkNow = !!(data.vm && data.vm.ok);
+        if (vmOkNow && !this._vmWasOk) {
+          window.dispatchEvent(new CustomEvent('vm-ready'));
+        }
+        this._vmWasOk = vmOkNow;
+      } catch(e) {
+        ['vm','llm','github','repo'].forEach(k => {
+          this.checks[k] = { ok: false, msg: 'erro: ' + e.message };
+        });
+        this._vmWasOk = false;
+      } finally {
+        this.loading = false;
+      }
+    },
+    color(key) {
+      if (this.loading || this.checks[key].ok === null) return '#9ca3af';
+      return this.checks[key].ok ? '#34d399' : '#f87171';
+    },
+    vmTimer() {
+      const v = this.checks.vm;
+      if (!v || v.ok || !v.boot_elapsed_secs) return '';
+      const s = v.boot_elapsed_secs;
+      const m = Math.floor(s / 60);
+      const r = String(s % 60).padStart(2, '0');
+      return `${m}:${r}`;
+    },
+    init() {
+      this.check();
+      setInterval(() => this.check(), 5000);
+    },
+  }));
+
+  // ── chatPanel ────────────────────────────────────────────
+  Alpine.data('chatPanel', () => ({
+    messages: [],
+    task:     '',
+    files:    [],
+    dragging: false,
+    running:  false,
+
+    get fileNames() {
+      return this.files.map(f => f.name).join(', ') || 'Nenhum arquivo .md selecionado';
+    },
+
+    addMsg(text, type = 'system', detail = '') {
+      let html = '';
+      try { html = marked.parse(String(text || '')); } catch(_) { html = String(text || ''); }
+      this.messages.push({ id: Date.now() + Math.random(), html, type, detail });
+      if (this.messages.length > 200) {
+        this.messages = this.messages.slice(-200);
+      }
+      this._persist();
+      this.$nextTick(() => {
+        const el = this.$refs.log;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+
+    _persist() {
+      try { localStorage.setItem('glb_chat', JSON.stringify(this.messages)); } catch(_) {}
+    },
+
+    clearChat() {
+      this.messages = [];
+      try { localStorage.removeItem('glb_chat'); } catch(_) {}
+      this.addMsg('Chat limpo.');
+    },
+
+    handleDrop(e) {
+      this.dragging = false;
+      this.files = [...e.dataTransfer.files].filter(f => f.name.endsWith('.md'));
+    },
+    handleFileChange(e) {
+      this.files = [...e.target.files].filter(f => f.name.endsWith('.md'));
+    },
+
+    async submitFiles() {
+      if (!this.files.length || this.running) return;
+      this.running = true;
+      Alpine.store('session').running = true;
+      this.addMsg(`Enviando ${this.files.length} spec(s)...`);
+      const form = new FormData();
+      this.files.forEach(f => form.append('spec', f, f.name));
+      try {
+        const r = await fetch('/api/run', { method: 'POST', body: form });
+        if (!r.ok) throw new Error(await r.text());
+        const { run_id } = await r.json();
+        this.addMsg(`Run iniciada: ${run_id}`, 'ok');
+        this.files = [];
+        this._startRun(run_id);
+      } catch(e) {
+        this.addMsg(`Erro: ${e.message}`, 'err');
+        this.running = false;
+        Alpine.store('session').running = false;
+      }
+    },
+
+    async execute() {
+      const task = this.task.trim();
+      if (!task || this.running) return;
+      this.running = true;
+      Alpine.store('session').running = true;
+      this.addMsg('Enviando tarefa...', 'system');
+      try {
+        const r = await fetch('/api/run', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ task }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const { run_id } = await r.json();
+        this.addMsg(`Run iniciada: ${run_id}`, 'ok');
+        this.addMsg(`📋 "${task}"`, 'task');
+        this.task = '';
+        this._startRun(run_id);
+      } catch(e) {
+        this.addMsg(`Erro: ${e.message}`, 'err');
+        this.running = false;
+        Alpine.store('session').running = false;
+      }
+    },
+
+    async stop() {
+      const runId = Alpine.store('session').runId;
+      if (!runId) return;
+      try {
+        await fetch(`/api/runs/${runId}/stop`, { method: 'POST' });
+        this.addMsg(`Run cancelada: ${runId}`, 'warn');
+      } catch(e) {
+        this.addMsg(`Erro ao parar: ${e.message}`, 'err');
+      }
+    },
+
+    _startRun(runId) {
+      Alpine.store('session').runId = runId;
+      localStorage.setItem('glb_run_id', runId);
+      window.dispatchEvent(new CustomEvent('run-started', { detail: { runId } }));
+      selectRunGlobal(runId);
+    },
+
+    onRunSelected(runId) {
+      Alpine.store('session').runId = runId;
+      localStorage.setItem('glb_run_id', runId);
+      selectRunGlobal(runId);
+    },
+
+    onStateChange(data) {
+      const state = data.state || '';
+      if (!state) return;
+      if (state === 'error') {
+        this.addMsg(`[error] ${data.id}`, 'err', data.error || '');
+      } else {
+        const typeMap = { done:'ok', waiting_human:'warn', running:'agent', pending:'agent', error:'err' };
+        this.addMsg(`[${state}] ${data.id}`, typeMap[state] || 'system');
+      }
+      const nodes = Alpine.store('dag').nodes;
+      const busy = Object.values(nodes).some(n => n.state === 'running' || n.state === 'pending');
+      this.running = busy;
+      Alpine.store('session').running = busy;
+    },
+
+    async init() {
+      try {
+        const r = await fetch('/api/status');
+        Alpine.store('session').connOk = r.ok;
+      } catch(_) { Alpine.store('session').connOk = false; }
+
+      try {
+        const saved = localStorage.getItem('glb_chat');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length) {
+            this.messages = parsed.slice(-200);
+          }
+        }
+      } catch(_) {}
+
+      if (!this.messages.length) {
+        this.addMsg('Bem-vindo ao golovebox. Faça upload de arquivos .md ou digite uma tarefa para iniciar.');
+      }
+
+      const savedRunId = localStorage.getItem('glb_run_id');
+      if (savedRunId) {
+        Alpine.store('session').runId = savedRunId;
+        await selectRunGlobal(savedRunId);
+        const savedNodeId = localStorage.getItem('glb_node_id');
+        if (savedNodeId) {
+          window.dispatchEvent(new CustomEvent('node-selected', {
+            detail: { runId: savedRunId, nodeId: savedNodeId }
+          }));
+        }
+      }
+    },
+  }));
+
+  // ── runList ──────────────────────────────────────────────
+  Alpine.data('runList', () => ({
+    runs: [],
+    _reloadTimer: null,
+    async load() {
+      try {
+        const data = await fetch('/api/runs').then(r => r.json());
+        this.runs = data || [];
+      } catch(_) {}
+    },
+    onStateChange(data) {
+      const state = data && data.state;
+      if (!state) return;
+      const activeId = Alpine.store('session').runId;
+      // Update inline first (cheap)
+      if (activeId) {
+        const run = this.runs.find(r => r.id === activeId);
+        if (run) {
+          if (state === 'error') run.state = 'error';
+          else if ((state === 'running' || state === 'pending') && run.state !== 'error') run.state = 'running';
+        }
+      }
+      // Debounce a refetch so terminal states (done/error) sync with backend infer.
+      if (this._reloadTimer) clearTimeout(this._reloadTimer);
+      this._reloadTimer = setTimeout(() => { this._reloadTimer = null; this.load(); }, 600);
+    },
+    select(runId) {
+      window.dispatchEvent(new CustomEvent('run-selected', { detail: { runId } }));
+    },
+    badgeClass(state) {
+      return 'badge ' + (state || 'system');
+    },
+    isActive(runId) {
+      return runId === Alpine.store('session').runId;
+    },
+    init() { this.load(); },
+  }));
+
+  // ── nodePanel ────────────────────────────────────────────
+  Alpine.data('nodePanel', () => ({
+    open:     false,
+    nodeId:   null,
+    runId:    null,
+    entries:  [],
+    runTask:  '',
+    nodeDesc: '',
+    nodeError:'',
+    branch:   '',
+    runState: '',
+    prUrl:    '',
+    expanded: {},
+
+    toggle(key) { this.expanded = { ...this.expanded, [key]: !this.expanded[key] }; },
+    isOpen(key) { return !!this.expanded[key]; },
+
+    obsHtml(e) {
+      const text = e.obs || '';
+      try {
+        return hljs.highlightAuto(text).value;
+      } catch(_) {
+        return text.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      }
+    },
+
+    async openFor(runId, nodeId) {
+      this.runId   = runId;
+      this.nodeId  = nodeId;
+      this.open    = true;
+      this.entries = [];
+      this.runTask  = '';
+      this.nodeDesc = '';
+      this.nodeError = '';
+      this.branch   = '';
+      this.runState = '';
+      this.prUrl    = '';
+      this.expanded  = {};
+      localStorage.setItem('glb_node_id', nodeId);
+
+      try {
+        const [logData, runData] = await Promise.all([
+          fetch(`/api/runs/${runId}/nodes/${nodeId}/log`).then(r => r.json()),
+          fetch(`/api/runs/${runId}`).then(r => r.json()),
+        ]);
+        this.entries  = logData || [];
+        this.runTask  = runData.task || '';
+        this.branch   = runData.current_branch || '';
+        this.runState = runData.run_state || '';
+        this.prUrl    = runData.pr_url || '';
+        const dagStore = Alpine.store('dag');
+        const node = dagStore.data && dagStore.data.nodes && dagStore.data.nodes[nodeId];
+        this.nodeDesc  = (node && (node.annotation || node.task)) || '';
+        this.nodeError = (dagStore.nodes[nodeId] && dagStore.nodes[nodeId].error) || '';
+        this._scrollLog();
+      } catch(_) {}
+    },
+
+    close() {
+      this.open   = false;
+      this.nodeId = null;
+      localStorage.removeItem('glb_node_id');
+    },
+
+    onNodeLog(nodeId, entry) {
+      if (nodeId !== this.nodeId) return;
+      this.entries.push(entry);
+      this._scrollLog();
+    },
+
+    fmtTime(ts) {
+      return ts ? new Date(ts).toLocaleTimeString() : '';
+    },
+
+    _scrollLog() {
+      this.$nextTick(() => {
+        const el = this.$refs.logEntries;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+  }));
+
+  // ── checkpointDialog ─────────────────────────────────────
+  Alpine.data('checkpointDialog', () => ({
+    open:       false,
+    runId:      null,
+    nodeId:     null,
+    annotation: '',
+    reason:     '',
+
+    openFor(runId, nodeId, annotation) {
+      this.runId      = runId;
+      this.nodeId     = nodeId;
+      this.annotation = annotation;
+      this.reason     = '';
+      this.open       = true;
+    },
+    close() { this.open = false; },
+    async approve() {
+      if (!this.runId) return;
+      this.close();
+      await fetch(`/api/runs/${this.runId}/approve/${this.nodeId}`, { method: 'POST' });
+      window.dispatchEvent(new CustomEvent('cp-result', { detail: { nodeId: this.nodeId, approved: true } }));
+    },
+    async reject() {
+      if (!this.runId) return;
+      const reason = this.reason.trim() || 'rejeitado pelo usuário';
+      this.close();
+      await fetch(`/api/runs/${this.runId}/reject/${this.nodeId}`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ reason }),
+      });
+      window.dispatchEvent(new CustomEvent('cp-result', { detail: { nodeId: this.nodeId, approved: false } }));
+    },
+  }));
+
+  // ── prModal ──────────────────────────────────────────────
+  Alpine.data('prModal', () => ({
+    open:   false,
+    runId:  null,
+    title:  '',
+    body:   '',
+    loading:false,
+    error:  '',
+
+    async openFor(runId) {
+      this.runId   = runId;
+      this.title   = '';
+      this.body    = '';
+      this.error   = '';
+      this.loading = true;
+      this.open    = true;
+      try {
+        const s = await fetch(`/api/runs/${runId}/pr/suggest`).then(r => r.json());
+        this.title = s.title || '';
+        this.body  = s.body  || '';
+      } catch(_) {}
+      this.loading = false;
+    },
+    close() { this.open = false; },
+    async submit() {
+      if (!this.title.trim()) { this.error = 'Título obrigatório'; return; }
+      this.loading = true;
+      this.error   = '';
+      try {
+        const res = await fetch(`/api/runs/${this.runId}/pr`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ title: this.title, body: this.body }),
+        });
+        if (!res.ok) { this.error = await res.text(); this.loading = false; return; }
+        const d = await res.json();
+        window.dispatchEvent(new CustomEvent('pr-opened', { detail: { runId: this.runId, prUrl: d.pr_url } }));
+        this.close();
+      } catch(e) { this.error = e.message; }
+      this.loading = false;
+    },
+  }));
+
+  // ── terminalPanel ────────────────────────────────────────
+  Alpine.data('terminalPanel', () => ({
+    term:       null,
+    ws:         null,
+    fitAddon:   null,
+    _resizeObs: null,
+    _retried:   false,
+
+    mount() {
+      this.term = new Terminal({
+        cursorBlink: true,
+        fontSize:    13,
+        fontFamily:  'monospace',
+        theme: { background: '#0d1117', foreground: '#e2e8f0', cursor: '#e2e8f0' },
+      });
+      this.fitAddon = new FitAddon.FitAddon();
+      this.term.loadAddon(this.fitAddon);
+      const container = document.getElementById('terminal-container');
+      this.term.open(container);
+      this.fitAddon.fit();
+      this._waitForVMAndConnect();
+      this.term.onData((data) => {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN)
+          this.ws.send(data);
+      });
+
+      this._resizeObs = new ResizeObserver(() => {
+        this.fitAddon.fit();
+        const { cols, rows } = this.term;
+        if (this.ws && this.ws.readyState === WebSocket.OPEN)
+          this.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      });
+      this._resizeObs.observe(container);
+    },
+
+    async _waitForVMAndConnect() {
+      // Avoid the "conectado→desconectado" flicker by waiting for the VM to be
+      // healthy before opening the WebSocket. Healthcheck polling (5s) will
+      // also dispatch a 'vm-ready' event we listen for.
+      this.term.write('\x1b[33m● aguardando VM...\x1b[0m\r\n');
+      const probe = async () => {
+        try {
+          const data = await fetch('/api/health').then(r => r.json());
+          return !!(data && data.vm && data.vm.ok);
+        } catch(_) { return false; }
+      };
+      if (await probe()) { this._connect(); return; }
+      const onReady = () => {
+        window.removeEventListener('vm-ready', onReady);
+        this._connect();
+      };
+      window.addEventListener('vm-ready', onReady);
+    },
+
+    _connect() {
+      const openedAt = Date.now();
+      this.ws = new WebSocket(`ws://${location.host}/ws/terminal`);
+      this.ws.binaryType = 'arraybuffer';
+      this.ws.onopen    = () => {
+        this._retried = false;
+        this.term.write('\r\n\x1b[32m● conectado à VM\x1b[0m\r\n');
+      };
+      this.ws.onmessage = (e) => this.term.write(new Uint8Array(e.data));
+      this.ws.onclose   = () => {
+        const elapsed = Date.now() - openedAt;
+        if (elapsed < 2000 && !this._retried) {
+          this._retried = true;
+          this.term.write('\r\n\x1b[33m● reconectando...\x1b[0m\r\n');
+          setTimeout(() => this._connect(), 500);
+          return;
+        }
+        this.term.write('\r\n\x1b[31m● desconectado\x1b[0m\r\n');
+      };
+      this.ws.onerror = () => this.term.write('\r\n\x1b[31m● erro de conexão\x1b[0m\r\n');
+    },
+
+    destroy() {
+      if (this._resizeObs) { this._resizeObs.disconnect(); this._resizeObs = null; }
+      if (this.ws)   { this.ws.close();   this.ws   = null; }
+      if (this.term) { this.term.dispose(); this.term = null; }
+      this.fitAddon = null;
+    },
+  }));
+
+  // ── filePanel ─────────────────────────────────────────────
+  Alpine.data('filePanel', () => ({
+    path:    '/root',
+    entries: [],
+    loading: false,
+    error:   '',
+    history: [],
+
+    async cd(newPath) {
+      this.history.push(this.path);
+      this.path = newPath;
+      await this.load();
+    },
+
+    async back() {
+      if (!this.history.length) return;
+      this.path = this.history.pop();
+      await this.load();
+    },
+
+    async load() {
+      this.loading = true;
+      this.error   = '';
+      try {
+        const r = await fetch('/api/vm/files?path=' + encodeURIComponent(this.path));
+        if (r.status === 503) {
+          this.error   = 'VM inicializando... tente novamente em alguns segundos.';
+          this.entries = [];
+          return;
+        }
+        if (!r.ok) { this.entries = []; return; }
+        this.entries = await r.json();
+      } catch(e) {
+        this.error   = 'Erro ao carregar arquivos: ' + e.message;
+        this.entries = [];
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    open(entry) {
+      if (entry.is_dir) {
+        this.cd(entry.path);
+      } else {
+        window.open('/api/vm/file?path=' + encodeURIComponent(entry.path), '_blank');
+      }
+    },
+
+    icon(entry) {
+      if (entry.is_dir) return '📁';
+      const ext = entry.name.split('.').pop().toLowerCase();
+      return { go:'🔵', sh:'⚙', md:'📝', log:'📋', json:'🟡', toml:'🟠', txt:'📄', yaml:'📄', yml:'📄' }[ext] || '📄';
+    },
+
+    fmt(bytes) {
+      if (bytes < 1024)       return bytes + ' B';
+      if (bytes < 1048576)    return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1048576).toFixed(1) + ' MB';
+    },
+
+    init() { this.load(); },
+  }));
+
+}); // end alpine:init
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5/css/xterm.css">
+<script src="https://cdn.jsdelivr.net/npm/xterm@5/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8/lib/xterm-addon-fit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2/cytoscape-dagre.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Left: Chat ─────────────────────────────────────── -->
+  <aside id="chat"
+         x-data="chatPanel"
+         @run-selected.window="onRunSelected($event.detail.runId)"
+         @sse-state-change.window="onStateChange($event.detail)"
+         @cp-result.window="addMsg($event.detail.approved ? 'Aprovado: '+$event.detail.nodeId : 'Rejeitado: '+$event.detail.nodeId, $event.detail.approved ? 'ok' : 'err')">
+
+    <div id="chat-header">
+      <div class="status-dot" :class="{red: !$store.session.connOk}"></div>
+      <h1>golovebox</h1>
+      <button class="chat-clear" @click="clearChat()" title="Limpar histórico do chat">✕</button>
+    </div>
+
+    <!-- Health -->
+    <div id="health-panel" x-data="healthPanel">
+      <template x-for="key in ['vm','llm','github','repo']" :key="key">
+        <div class="h-indicator">
+          <span class="h-dot"
+                :class="{checking: loading}"
+                :style="'color:' + color(key)"
+                :title="checks[key] ? checks[key].msg : ''"
+                >●</span>
+          <span x-text="key.toUpperCase()"></span>
+          <span x-show="key === 'vm' && vmTimer()" class="vm-timer" x-text="vmTimer()"></span>
+        </div>
+      </template>
+      <button id="health-refresh" @click="check()" title="Verificar health">↻</button>
+    </div>
+
+    <!-- Messages -->
+    <div id="messages" x-ref="log">
+      <template x-for="m in messages" :key="m.id">
+        <div :class="'msg ' + m.type">
+          <div x-html="m.html"></div>
+          <div x-show="m.detail" class="msg-detail" x-text="m.detail"></div>
+        </div>
+      </template>
+    </div>
+
+    <!-- File upload -->
+    <div id="upload-area">
+      <label>Spec files (.md)</label>
+      <div id="drop-zone"
+           :class="{drag: dragging}"
+           @click="$refs.fileInput.click()"
+           @dragover.prevent="dragging=true"
+           @dragleave.prevent="dragging=false"
+           @drop.prevent="handleDrop($event)">
+        Clique ou arraste arquivos .md aqui
+      </div>
+      <input type="file" x-ref="fileInput" multiple accept=".md"
+             @change="handleFileChange($event)" style="display:none">
+      <div class="file-list" x-text="fileNames"></div>
+      <button class="btn-primary"
+              @click="submitFiles()"
+              :disabled="files.length === 0 || running">▶ Executar specs</button>
+    </div>
+
+    <!-- Manual task -->
+    <div id="task-area">
+      <label>ou digite a tarefa:</label>
+      <textarea class="task-ta" x-model="task" rows="5"
+                placeholder="Implemente o endpoint POST /api/users com validação de email..."
+                @keydown.ctrl.enter="execute()"></textarea>
+      <button class="btn-primary"
+              @click="execute()"
+              :disabled="!task.trim() || running">▶ Executar</button>
+    </div>
+
+    <!-- Runs list -->
+    <div id="runs-panel"
+         x-data="runList"
+         @run-started.window="load()"
+         @run-selected.window="load()"
+         @sse-state-change.window="onStateChange($event.detail)">
+      <h2>Runs anteriores</h2>
+      <div id="runs-list">
+        <template x-for="r in runs" :key="r.id">
+          <div class="run-item"
+               :class="{active: isActive(r.id)}"
+               @click="select(r.id)">
+            <div class="run-row">
+              <span x-text="r.id"></span>
+              <span :class="badgeClass(r.state)" x-text="r.state"></span>
+            </div>
+            <div class="run-preview" x-show="r.task" x-text="'\"' + r.task + '\"'"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ── Right: DAG + Bottom Panel ────────────────────────── -->
+  <main id="dag-panel">
+    <div id="dag-header">
+      <span>DAG</span>
+      <span id="run-label" x-text="$store.session.runId || ''" x-data></span>
+      <button class="dag-relayout"
+              x-data
+              @click="window.relayoutDAG && window.relayoutDAG()"
+              title="Reorganizar (limpa posições salvas deste run)">↻ reorganizar</button>
+      <button class="stop-btn"
+              x-show="$store.session.running"
+              x-cloak
+              x-data
+              @click="window.dispatchEvent(new CustomEvent('stop-run'))">⏹ Parar run</button>
+    </div>
+    <div id="dag-canvas"></div>
+    <div id="canvas-tooltip"></div>
+
+    <!-- Bottom panel: Terminal + Files -->
+    <div id="bottom-panel"
+         x-data="{
+           tab: localStorage.getItem('glb_bottom_tab') || 'terminal',
+           setTab(t) { this.tab = t; localStorage.setItem('glb_bottom_tab', t);
+             if (t === 'terminal') this.$nextTick(() => this.$dispatch('terminal-show'));
+             if (t === 'files')   this.$nextTick(() => this.$dispatch('files-show'));
+           }
+         }">
+      <div class="bottom-tabs">
+        <div class="bottom-tab" :class="{active: tab==='terminal'}" @click="setTab('terminal')">⌨ Terminal</div>
+        <div class="bottom-tab" :class="{active: tab==='files'}"    @click="setTab('files')">📁 Arquivos</div>
+      </div>
+      <div class="bottom-content">
+        <!-- Terminal -->
+        <div x-show="tab==='terminal'" style="height:100%"
+             x-data="terminalPanel"
+             @terminal-show.window="$nextTick(() => { if (!term) mount(); else fitAddon && fitAddon.fit(); })"
+             x-init="$nextTick(() => mount())">
+          <div id="terminal-container"></div>
+        </div>
+        <!-- File explorer -->
+        <div x-show="tab==='files'" style="height:100%"
+             x-data="filePanel"
+             @files-show.window="load()">
+          <div id="file-explorer">
+            <div class="file-toolbar">
+              <button @click="back()" :disabled="!history.length" title="Voltar">←</button>
+              <span class="file-path" x-text="path"></span>
+              <button @click="load()" title="Atualizar">↻</button>
+            </div>
+            <div class="file-loading" x-show="loading">carregando...</div>
+            <div x-show="error && !loading" style="padding:8px 10px;font-size:0.75rem;color:#fca5a5" x-text="error"></div>
+            <div class="file-entries" x-show="!loading && !error">
+              <template x-for="e in entries" :key="e.path">
+                <div class="file-entry" @click="open(e)">
+                  <span class="fe-icon" x-text="icon(e)"></span>
+                  <span class="fe-name" :class="e.is_dir ? 'dir' : 'file'" x-text="e.name"></span>
+                  <span class="fe-size" x-show="!e.is_dir" x-text="fmt(e.size)"></span>
+                </div>
+              </template>
+              <div x-show="!entries.length && !loading" style="padding:8px 10px;color:#64748b;font-size:0.75rem">
+                Diretório vazio
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Node log panel (right slide-out) -->
+    <div id="node-panel"
+         x-data="nodePanel"
+         :class="{open: open}"
+         @node-selected.window="openFor($event.detail.runId, $event.detail.nodeId)"
+         @sse-node-log.window="onNodeLog($event.detail.nodeId, $event.detail.entry)"
+         @pr-opened.window="if($event.detail.runId===runId){prUrl=$event.detail.prUrl;runState='pushed'}">
+
+      <div class="np-header">
+        <span class="np-title" x-text="'node: ' + (nodeId || '')"></span>
+        <button class="np-close" @click="close()">×</button>
+      </div>
+
+      <div class="np-meta">
+        <div x-show="runTask">
+          <strong>Objetivo do run:</strong>
+          <span class="np-meta-val" x-text="runTask"></span>
+        </div>
+        <div x-show="nodeDesc" style="margin-top:6px">
+          <strong>Descrição do node:</strong>
+          <span class="np-meta-val" x-text="nodeDesc"></span>
+        </div>
+        <div x-show="branch" style="margin-top:6px">
+          <strong>Branch:</strong>
+          <span class="np-branch" x-text="branch"></span>
+        </div>
+        <div x-show="runState" style="margin-top:6px;display:flex;align-items:center;gap:8px">
+          <span x-show="runState==='pushed'" style="background:#065f46;color:#6ee7b7;padding:2px 8px;border-radius:4px;font-size:0.72rem">✓ pushed</span>
+          <span x-show="runState==='git_error'" style="background:#7f1d1d;color:#fca5a5;padding:2px 8px;border-radius:4px;font-size:0.72rem">✗ git error</span>
+          <button x-show="runState==='pushed' && !prUrl" @click="$dispatch('open-pr-modal', {runId: runId})"
+            style="background:#1d4ed8;color:#fff;border:none;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:0.75rem">
+            Abrir PR →
+          </button>
+          <a x-show="prUrl" :href="prUrl" target="_blank"
+            style="background:#065f46;color:#6ee7b7;padding:3px 10px;border-radius:4px;font-size:0.75rem;text-decoration:none">
+            Ver PR ↗
+          </a>
+        </div>
+      </div>
+
+      <div class="np-error" x-show="nodeError" x-text="'✗ Erro:\n' + nodeError"></div>
+
+      <div id="node-log" x-ref="logEntries">
+        <template x-for="(e, i) in entries" :key="i">
+          <div class="log-entry">
+            <div class="log-hdr">
+              <span x-text="'iter ' + e.iter + ' — ' + e.action"></span>
+              <span x-text="fmtTime(e.ts)"></span>
+            </div>
+            <template x-if="e.prompt">
+              <div>
+                <div class="log-toggle" @click="toggle('p'+i)">
+                  <span x-text="isOpen('p'+i) ? '▼' : '▸'"></span>
+                  <span>Prompt enviado</span>
+                </div>
+                <div class="log-block prompt" x-show="isOpen('p'+i)" x-text="e.prompt"></div>
+              </div>
+            </template>
+            <template x-if="e.reply">
+              <div>
+                <div class="log-toggle" @click="toggle('r'+i)">
+                  <span x-text="isOpen('r'+i) ? '▼' : '▸'"></span>
+                  <span>Resposta do LLM</span>
+                </div>
+                <div class="log-block reply" x-show="isOpen('r'+i)" x-text="e.reply"></div>
+              </div>
+            </template>
+            <div class="log-param" x-show="e.params" x-text="'▶ ' + (e.params || e.action)"></div>
+            <div class="log-obs"><pre x-html="obsHtml(e)"></pre></div>
+          </div>
+        </template>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<!-- PR modal -->
+<div x-data="prModal" @open-pr-modal.window="openFor($event.detail.runId)">
+  <div id="overlay" x-cloak x-show="open" @click="close()" style="z-index:199"></div>
+  <div x-cloak x-show="open" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    z-index:200;background:#1f2937;border:1px solid #374151;border-radius:8px;padding:24px;
+    width:min(480px,90vw);display:flex;flex-direction:column;gap:12px">
+    <h3 style="margin:0;color:#f9fafb;font-size:1rem">Abrir Pull Request</h3>
+    <input x-model="title" type="text" placeholder="Título do PR"
+      style="width:100%;display:block;background:#111827;border:1px solid #374151;color:#f9fafb;padding:8px;border-radius:4px;font-size:0.9rem">
+    <textarea x-model="body" rows="5" placeholder="Descrição (opcional)"
+      style="width:100%;display:block;background:#111827;border:1px solid #374151;color:#f9fafb;padding:8px;border-radius:4px;font-size:0.85rem;resize:vertical"></textarea>
+    <div x-show="error" x-text="error" style="color:#fca5a5;font-size:0.8rem"></div>
+    <div x-show="loading" style="color:#9ca3af;font-size:0.8rem">Aguardando...</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button @click="close()" style="background:#374151;color:#d1d5db;border:none;padding:6px 14px;border-radius:4px;cursor:pointer">Cancelar</button>
+      <button @click="submit()" :disabled="loading"
+        style="background:#1d4ed8;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer">
+        Confirmar →
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Checkpoint dialog -->
+<div x-data="checkpointDialog"
+     @sse-checkpoint.window="openFor($event.detail.runId, $event.detail.nodeId, $event.detail.annotation)">
+  <div id="overlay" x-cloak x-show="open" @click="close()"></div>
+  <div id="cp-dialog" x-cloak x-show="open">
+    <h3 x-text="'Checkpoint: ' + (nodeId || '')"></h3>
+    <p x-text="annotation"></p>
+    <input class="cp-reason" type="text" x-model="reason" placeholder="Motivo da rejeição (opcional)">
+    <div class="cp-btns">
+      <button class="cp-approve" @click="approve()">✓ Aprovar</button>
+      <button class="cp-reject"  @click="reject()">✗ Rejeitar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Vanilla JS: SSE + Cytoscape DAG ──────────────────────
+
+const NODE_COLORS = {
+  pending:'#4b5563', running:'#b45309', done:'#15803d',
+  error:'#b91c1c', waiting_human:'#c2410c',
+};
+const NODE_FG = {
+  pending:'#d1d5db', running:'#fef3c7', done:'#bbf7d0',
+  error:'#fecaca', waiting_human:'#fed7aa',
+};
+
+let currentRunId = null;
+const tooltip = document.getElementById('canvas-tooltip');
+
+// Cytoscape instance (created once, reused)
+cytoscape.use(cytoscapeDagre);
+const cy = cytoscape({
+  container: document.getElementById('dag-canvas'),
+  style: [
+    {
+      selector: 'node',
+      style: {
+        'background-color': 'data(bg)',
+        'label': 'data(label)',
+        'color': 'data(fg)',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'font-size': '11px',
+        'font-family': 'system-ui, sans-serif',
+        'width': 160,
+        'height': 48,
+        'shape': 'round-rectangle',
+        'text-wrap': 'wrap',
+        'text-max-width': '140px',
+        'cursor': 'pointer',
+      },
+    },
+    {
+      selector: 'edge',
+      style: {
+        'curve-style': 'bezier',
+        'target-arrow-shape': 'triangle',
+        'line-color': '#334155',
+        'target-arrow-color': '#334155',
+        'width': 1.5,
+      },
+    },
+    {
+      selector: '.waiting_human',
+      style: {
+        'border-color': '#fb923c',
+        'border-width': 3,
+      },
+    },
+  ],
+  layout: { name: 'preset' },
+  userZoomingEnabled: true,
+  userPanningEnabled: true,
+  boxSelectionEnabled: false,
+});
+
+function positionsKey(runId) { return 'glb_positions_' + (runId || 'unknown'); }
+
+function loadSavedPositions(runId) {
+  try {
+    const raw = localStorage.getItem(positionsKey(runId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object') ? parsed : null;
+  } catch(_) { return null; }
+}
+
+function savePositions() {
+  if (!currentRunId) return;
+  const map = {};
+  cy.nodes().forEach(n => {
+    const p = n.position();
+    map[n.id()] = { x: p.x, y: p.y };
+  });
+  try { localStorage.setItem(positionsKey(currentRunId), JSON.stringify(map)); } catch(_) {}
+}
+
+function clearSavedPositions(runId) {
+  try { localStorage.removeItem(positionsKey(runId)); } catch(_) {}
+}
+
+function relayoutDAG() {
+  clearSavedPositions(currentRunId);
+  cy.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 80, rankSep: 120 }).run();
+  cy.fit(cy.elements(), 40);
+}
+
+function loadDAG(dagData) {
+  cy.elements().remove();
+  if (!dagData || !dagData.nodes) return;
+  const dagStore = Alpine.store('dag');
+  const saved = loadSavedPositions(currentRunId);
+
+  Object.entries(dagData.nodes || {}).forEach(([id, n]) => {
+    if (n.type === 'sync_repo') return; // infrastructure node — not shown in canvas
+    const ns    = dagStore.nodes[id] || {};
+    const state = ns.state || n.state || 'pending';
+    const addOpts = {
+      group: 'nodes',
+      data: {
+        id,
+        label: id,
+        bg: NODE_COLORS[state] || NODE_COLORS.pending,
+        fg: NODE_FG[state]     || NODE_FG.pending,
+        state,
+        annotation: n.annotation || '',
+        task:       n.task || '',
+        error:      ns.error || '',
+      },
+    };
+    if (saved && saved[id] && typeof saved[id].x === 'number' && typeof saved[id].y === 'number') {
+      addOpts.position = { x: saved[id].x, y: saved[id].y };
+    }
+    cy.add(addOpts);
+    if (state === 'waiting_human') cy.getElementById(id).addClass('waiting_human');
+  });
+
+  (dagData.edges || []).forEach(([from, to], i) => {
+    if (from === 'sync_repo' || to === 'sync_repo') return;
+    cy.add({ group: 'edges', data: { id: `e${i}`, source: from, target: to } });
+  });
+
+  // Identify nodes whose position was not restored from localStorage.
+  const missing = cy.nodes().filter(n => {
+    const p = n.position();
+    return !p || (p.x === 0 && p.y === 0);
+  });
+
+  if (missing.length === cy.nodes().length) {
+    // No saved positions at all → full dagre layout, then center.
+    cy.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 80, rankSep: 120 }).run();
+    cy.fit(cy.elements(), 40);
+    cy.center();
+  } else if (missing.length > 0) {
+    // Partial: lay out just the missing ones with dagre on the whole graph for
+    // consistency, but keep saved positions as anchors via 'preset' fallback.
+    cy.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 80, rankSep: 120 }).run();
+    cy.fit(cy.elements(), 40);
+  } else {
+    // Everything restored — just fit the camera.
+    cy.fit(cy.elements(), 40);
+  }
+}
+
+function updateNodeState(id, state, error) {
+  const n = cy.getElementById(id);
+  if (!n || !n.length) return;
+  n.data({
+    bg:    NODE_COLORS[state] || NODE_COLORS.pending,
+    fg:    NODE_FG[state]     || NODE_FG.pending,
+    state,
+    error: error || '',
+  });
+  n.removeClass('waiting_human');
+  if (state === 'waiting_human') n.addClass('waiting_human');
+}
+
+function updateNodeIter(id, iter) {
+  const n = cy.getElementById(id);
+  if (!n || !n.length) return;
+  n.data('label', id + '\nrunning [' + iter + '/20]');
+}
+
+// Cytoscape events
+cy.on('tap', 'node', e => {
+  if (!currentRunId) return;
+  const n     = e.target;
+  const state = n.data('state');
+  if (state === 'waiting_human') {
+    window.dispatchEvent(new CustomEvent('sse-checkpoint', {
+      detail: { runId: currentRunId, nodeId: n.id(), annotation: n.data('annotation') || n.id() },
+    }));
+  } else {
+    window.dispatchEvent(new CustomEvent('node-selected', {
+      detail: { runId: currentRunId, nodeId: n.id() },
+    }));
+  }
+});
+
+cy.on('mouseover', 'node', e => {
+  const n   = e.target;
+  const pos = e.renderedPosition;
+  const err = n.data('error');
+  tooltip.textContent = n.id() + (err ? '\n✗ ' + err.slice(0, 80) : '');
+  tooltip.style.display = 'block';
+  const rect = document.getElementById('dag-canvas').getBoundingClientRect();
+  tooltip.style.left = (rect.left + pos.x + 14) + 'px';
+  tooltip.style.top  = (rect.top  + pos.y + 14) + 'px';
+});
+
+cy.on('mouseout', 'node', () => { tooltip.style.display = 'none'; });
+
+cy.on('dragfree', 'node', () => savePositions());
+
+// ── selectRunGlobal ────────────────────────────────────────
+async function selectRunGlobal(runId) {
+  currentRunId = runId;
+  Alpine.store('dag').reset();
+  connectSSE(runId);
+
+  try {
+    const resp = await fetch(`/api/runs/${runId}`);
+    if (resp.status === 404) {
+      // Run no longer exists (e.g. deleted or server restarted before dag.json was written).
+      localStorage.removeItem('glb_run_id');
+      localStorage.removeItem('glb_node_id');
+      currentRunId = null;
+      Alpine.store('session').runId = null;
+      if (window._sse) { window._sse.close(); window._sse = null; }
+      return;
+    }
+    const data = await resp.json();
+    Alpine.store('dag').data = data.dag;
+
+    const ns = data.node_states || {};
+    for (const [id, s] of Object.entries(ns)) {
+      const state = typeof s === 'string' ? s : s.state;
+      const error = typeof s === 'object' ? (s.error || '') : '';
+      Alpine.store('dag').update(id, state, error);
+    }
+    if (data.dag) loadDAG(data.dag);
+  } catch(_) {}
+}
+
+// ── SSE ────────────────────────────────────────────────────
+function connectSSE(runId) {
+  if (window._sse) { window._sse.close(); window._sse = null; }
+  const es = new EventSource(`/api/runs/${runId}/stream`);
+  window._sse = es;
+
+  es.onopen  = () => { Alpine.store('session').connOk = true; };
+  es.onerror = () => { Alpine.store('session').connOk = false; };
+
+  es.onmessage = (e) => {
+    let data;
+    try { data = JSON.parse(e.data); } catch(_) { return; }
+
+    if (data.type === 'node_log') {
+      Alpine.store('dag').setIter(data.node_id, data.iter);
+      updateNodeIter(data.node_id, data.iter);
+      window.dispatchEvent(new CustomEvent('sse-node-log', {
+        detail: { nodeId: data.node_id, entry: data },
+      }));
+      return;
+    }
+
+    if (!data.id) return;
+    Alpine.store('dag').update(data.id, data.state, data.error || '');
+    updateNodeState(data.id, data.state, data.error || '');
+    window.dispatchEvent(new CustomEvent('sse-state-change', { detail: data }));
+
+    // Auto-open the node panel on the first error so the user sees the failure
+    // immediately instead of having to hunt for the failed node in the DAG.
+    if (data.state === 'error') {
+      window.dispatchEvent(new CustomEvent('node-selected', {
+        detail: { runId: currentRunId, nodeId: data.id },
+      }));
+    }
+
+    if (data.state === 'waiting_human') {
+      window.dispatchEvent(new CustomEvent('sse-checkpoint', {
+        detail: { runId: currentRunId, nodeId: data.id, annotation: data.annotation || data.id },
+      }));
+    }
+  };
+}
+
+// stop-run event from the DAG header button
+window.addEventListener('stop-run', async () => {
+  const runId = Alpine.store('session').runId;
+  if (!runId) return;
+  try { await fetch(`/api/runs/${runId}/stop`, { method: 'POST' }); } catch(_) {}
+});
+</script>
+</body>
+</html>

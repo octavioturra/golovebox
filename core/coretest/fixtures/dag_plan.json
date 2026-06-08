@@ -1,0 +1,4 @@
+[
+  {"id":"sync_repo","type":"sync_repo","task":"Clone or pull the repository","dependencies":[]},
+  {"id":"implement_feature","type":"task","task":"Implement the authentication feature","dependencies":["sync_repo"]}
+]

@@ -1,7 +1,7 @@
 # golovebox — Product Requirements Document
 
-**Versão:** 0.2 — V0 completo + V1 planejado
-**Status:** V0 phases 1-9 entregues. Phases 10-13 em spec. V1 em planejamento.
+**Versão:** 0.3 — V0 completo (29 fases) + V1 planejado
+**Status:** V0 completo (fases 1-29). Ver [FASES.json](FASES.json) para digest completo. V1 em planejamento.
 
 ---
 
@@ -101,64 +101,7 @@ golovebox daemon
 
 ## 6. Arquitetura
 
-### V0 — hoje
-
-```
-┌──────────────────────────────────────────────────────┐
-│                    golovebox.exe                     │
-│                                                      │
-│  ┌──────────┐    ┌────────────────────────────────┐ │
-│  │ Gateway  │    │         Orchestrator           │ │
-│  │ Telegram │───▶│   spec → DAG → executor        │ │
-│  │ Web UI   │    └──────────────┬─────────────────┘ │
-│  │ CLI      │                   │                    │
-│  └──────────┘              nodes│                    │
-│                                 ▼                    │
-│  ┌──────────┐    ┌────────────────────────────────┐ │
-│  │ Memory   │◀──▶│         Agent Loop             │ │
-│  │ chromem  │    │   ReAct: thought/action/obs    │ │
-│  │ .ai/     │    │                                │ │
-│  └──────────┘    │   tools: shell, files, github  │ │
-│                  └──────────────┬─────────────────┘ │
-│                                 │ SSH / SFTP         │
-└─────────────────────────────────┼────────────────────┘
-                                  │
-                    ┌─────────────▼──────────────┐
-                    │       QEMU Alpine VM        │
-                    │  git  go  python  node      │
-                    │  gcc  make  curl  openssh   │
-                    └────────────────────────────┘
-```
-
-### V1 — TechLead
-
-```
-┌──────────────────────────────────────────────────────┐
-│                    golovebox.exe                     │
-│                                                      │
-│  ┌──────────┐    ┌────────────────────────────────┐ │
-│  │ Inputs   │    │         Orchestrator           │ │
-│  │ Jira     │───▶│   spec → DAG → executor        │ │
-│  │ GitHub   │    └──────────────┬─────────────────┘ │
-│  │ Web UI   │                   │                    │
-│  │ Telegram │              nodes│                    │
-│  └──────────┘                   ▼                    │
-│                  ┌────────────────────────────────┐  │
-│  ┌──────────┐    │      TechLead Agent Loop       │  │
-│  │ .ai/     │◀──▶│  read → specify → delegate     │  │
-│  │ specs/   │    │  verify → summarize            │  │
-│  │ reports/ │    └──────────────┬─────────────────┘  │
-│  │ tasks/   │                   │                    │
-│  └──────────┘            delegate│                   │
-│                                  ▼                   │
-│  ┌──────────┐    ┌────────────────────────────────┐ │
-│  │ Comms    │    │       CodingAgent              │ │
-│  │ Slack    │    │  ClaudeCode | Codex | Gemini   │ │
-│  │ Email    │    │  reads .ai/specs/              │ │
-│  │ Calendar │    │  writes src/ + .ai/reports/    │ │
-│  └──────────┘    └────────────────────────────────┘ │
-└──────────────────────────────────────────────────────┘
-```
+Workspace Go com 7 módulos independentes. Ver [README](../README.md#módulos) para mapa completo e diagrama de dependências.
 
 ---
 
@@ -216,35 +159,7 @@ Sem internet após o build. Reexecutável via `golovebox init --repair`.
 
 ## 9. Stack Técnica
 
-### Backend
-
-| Camada | Tecnologia | Justificativa |
-|---|---|---|
-| Linguagem | Go 1.22+ | Single binary, CGO_ENABLED=0 |
-| CLI | spf13/cobra | Subcomandos, flags, help automático |
-| Config | BurntSushi/toml | Simples, pure Go |
-| HTTP router | go-chi/chi/v5 | Sub-routers, middleware, WebSocket |
-| Logging | log/slog stdlib | Estruturado, text/json, zero dependência |
-| LLM | internal/llm | HTTP puro, OpenAI-compat, retry exponencial |
-| SSH/SFTP | golang.org/x/crypto/ssh + pkg/sftp | Pure Go |
-| WebSocket | gorilla/websocket | Terminal SSH no browser |
-| Memória vetorial | philippgille/chromem-go | Pure Go, zero CGO |
-| GitHub | google/go-github/v60 | Client oficial |
-| CIDATA ISO | github.com/kdomanski/iso9660 | Pure Go, zero CGO |
-| Build | github.com/magefile/mage | Build system em Go puro |
-| Telegram | go-telegram-bot-api/v5 | Gateway secundário |
-
-### Frontend (CDN, zero build step)
-
-| | |
-|---|---|
-| Reatividade | Alpine.js v3 |
-| DAG visual | Cytoscape.js v3 + cytoscape-dagre |
-| Terminal | xterm.js + addon-fit |
-| Markdown | marked.js |
-| Syntax highlight | highlight.js |
-
-**Regra absoluta:** `CGO_ENABLED=0`. Sem exceção.
+Stack completa em [`.ai/AGENTS.md`](AGENTS.md). Regra absoluta: `CGO_ENABLED=0`.
 
 ---
 
@@ -310,18 +225,7 @@ Sem internet após o build. Reexecutável via `golovebox init --repair`.
 
 ## 12. DSL de Intenção
 
-Prosa Markdown com keywords opcionais em MAIÚSCULAS. Legível por humano, parseável pelo orchestrator.
-
-| Keyword | Efeito no DAG |
-|---|---|
-| `NEW BRANCH <nome>` | node `branch` — `git checkout -b` |
-| `PUSH` | node `push` — `git push --set-upstream` |
-| `PR "título"` | node `pr` — cria ou atualiza PR |
-| `ATTENTION_HERE` | node `checkpoint` — pausa, aguarda aprovação humana |
-| `RUN_TEST` | node `gate` — só avança se testes passarem |
-| `NOTIFY_ME` | node `notify` — envia notificação e continua |
-| `NOT_TODO` | excluído do DAG, registrado em `tech_debt.md` |
-| `TRY ... OR_ELSE ...` | node `try_else` — fallback automático |
+Prosa Markdown com keywords opcionais em MAIÚSCULAS. Spec canônica: [`promptlang/DSL.md`](../promptlang/DSL.md).
 
 ---
 
@@ -346,25 +250,13 @@ Prosa Markdown com keywords opcionais em MAIÚSCULAS. Legível por humano, parse
 
 ## 14. Roadmap de Entrega
 
-### V0 — Portable Coding Workflow
+### V0 — Portable Coding Workflow ✅ Completo
 
-| Phase | Status | Entregável |
-|---|---|---|
-| 1-9 | ✅ | Foundation, Agent, Gateway, Platform, Binary, QEMU, VM, Observabilidade, UX |
-| 10 | 🔜 | UI Refactor — Alpine.js |
-| 11 | 🔜 | Refactor — Cytoscape + chi + slog |
-| 12 | 🔜 | Terminal SSH + File Explorer na web |
-| 13 | 🔜 | Workflow DSL — NEW BRANCH, PUSH, PR, sync_repo |
+29 fases entregues. Ver [FASES.json](FASES.json) para digest completo.
 
 ### V1 — TechLead Autônomo
 
-| Fase | Entregável |
-|---|---|
-| v1_fase1 | CodingAgent interface, delegate_code, verify_implementation, .ai/ convention |
-| v1_fase2 | Project Memory — .ai/ como memória viva, hierarquia de contexto |
-| v1_fase3 | Communication Layer — Slack, email, calendário |
-| v1_fase4 | PM Integration — Jira, Linear, GitHub Issues |
-| v1_fase5 | Learning Loop — specs melhoram com uso |
+Roadmap detalhado: [`hypercontext.json:v1_roadmap`](hypercontext.json).
 
 ---
 
