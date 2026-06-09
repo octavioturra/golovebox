@@ -37,7 +37,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		if d > 0 {
 			time.Sleep(d * time.Millisecond)
 		}
-		if s.gw.IsVMReady() {
+		if s.interactive.Ready(r.Context()) {
 			break
 		}
 	}
@@ -134,7 +134,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 
 // handleVMFiles lists a directory on the VM via SFTP.
 func (s *Server) handleVMFiles(w http.ResponseWriter, r *http.Request) {
-	if !s.gw.IsVMReady() {
+	if !s.interactive.Ready(r.Context()) {
 		w.Header().Set("Content-Type", "application/json")
 		http.Error(w, `{"error":"vm_not_ready"}`, http.StatusServiceUnavailable)
 		return

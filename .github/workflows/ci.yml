@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mod: [core, promptlang, sandbox, toolskills, derivator, orchestrator, app]
+        mod: [core, sandbox, toolskills, app]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -38,20 +38,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: no module imports app
         run: |
-          ! grep -rq 'golovebox/app' core/ promptlang/ sandbox/ toolskills/ derivator/ orchestrator/
+          ! grep -rq 'golovebox/app' core/ sandbox/ toolskills/
       - name: core imports no project module
         run: |
-          ! grep -rEq 'golovebox/(promptlang|sandbox|toolskills|derivator|orchestrator|app)' core/
+          ! grep -rEq 'golovebox/(sandbox|toolskills|app)' core/
       - name: product modules import only core
         run: |
-          for mod in promptlang sandbox toolskills derivator orchestrator; do
-            siblings=$(echo "promptlang sandbox toolskills derivator orchestrator app" \
+          for mod in sandbox toolskills; do
+            siblings=$(echo "sandbox toolskills app" \
               | tr ' ' '\n' | grep -vx "$mod" | paste -sd'|' -)
             if grep -rE "golovebox/($siblings)" "$mod/" --include='*.go' 2>/dev/null; then
               echo "FAIL: $mod imports a sibling product module"
               exit 1
             fi
           done
+      - name: no dead module refs in app
+        run: |
+          ! grep -rEq 'golovebox/(promptlang|derivator|orchestrator)' app/
 
   integration-build:
     name: "fast / integration / build via workspace"

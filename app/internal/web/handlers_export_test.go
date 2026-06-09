@@ -1,51 +1,21 @@
-// handlers_export_test.go exposes internal handler logic for black-box tests.
-// This file is compiled only when running tests.
 package web
 
 import (
-	"encoding/json"
-	"net/http"
-	"os"
-	"path/filepath"
+	"context"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/user/golovebox/core"
 )
 
-// HandleListRuns returns an http.HandlerFunc for GET /api/runs backed by store.
-func HandleListRuns(store *RunStore) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		runs, _ := store.ListRuns()
-		if runs == nil {
-			runs = []RunMeta{}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(runs)
-	}
-}
+// fakeSandboxNotReady is a core.Sandbox stub that always reports not-ready.
+type fakeSandboxNotReady struct{}
 
-// HandleGetRun returns an http.HandlerFunc for GET /api/runs/{id} backed by store.
-func HandleGetRun(store *RunStore) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		runID := chi.URLParam(r, "id")
-		if _, err := os.Stat(store.RunDir(runID)); os.IsNotExist(err) {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		d, err := store.LoadDAG(runID)
-		var dagJSON json.RawMessage
-		if err == nil {
-			dagJSON, _ = d.ToJSON()
-		}
-		statesData, _ := os.ReadFile(filepath.Join(store.RunDir(runID), "node_states.json"))
-		var nodeStates any
-		_ = json.Unmarshal(statesData, &nodeStates)
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"dag":            dagJSON,
-			"node_states":    nodeStates,
-			"task":           store.ReadTask(runID),
-			"current_branch": store.GetRunMeta(runID, "current_branch"),
-		})
-	}
+func (fakeSandboxNotReady) Exec(_ context.Context, _ string) (core.Output, error) {
+	return core.Output{}, nil
 }
+func (fakeSandboxNotReady) PutFile(_ context.Context, _ string, _ []byte) error {
+	return nil
+}
+func (fakeSandboxNotReady) GetFile(_ context.Context, _ string) ([]byte, error) {
+	return nil, nil
+}
+func (fakeSandboxNotReady) Ready(_ context.Context) bool { return false }

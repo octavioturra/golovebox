@@ -1,5 +1,0 @@
-[
-  {"id":"analyse","text":"Analyse the requirements","priority":"critical","depends_on":[]},
-  {"id":"design","text":"Design the API","priority":"enabling","depends_on":["analyse"]},
-  {"id":"docs","text":"Write documentation","priority":"accessory","depends_on":["design"]}
-]

@@ -3,9 +3,6 @@ go 1.26
 use (
 	./app
 	./core
-	./promptlang
 	./sandbox
 	./toolskills
-	./derivator
-	./orchestrator
 )
