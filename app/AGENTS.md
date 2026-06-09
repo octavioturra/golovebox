@@ -1,7 +1,7 @@
 # app — AGENTS.md
 
 ## Responsabilidade única
-Composition root: instancia todos os módulos concretos, monta o binário `golovebox`. Contém CLI (cobra), Web UI (chi + Alpine.js), gateway (Telegram/Slack/email), setup wizard e assets embed (QEMU + Alpine qcow2).
+Composition root: instancia VM + web shell. Contém CLI (cobra), Web UI (chi + Alpine.js + xterm.js), setup wizard e assets embed (QEMU + Alpine qcow2).
 
 ## Este módulo NÃO tem contrato próprio
 É o único módulo que importa todos os outros. Nenhum módulo importa `app`.
@@ -12,27 +12,31 @@ Composition root: instancia todos os módulos concretos, monta o binário `golov
 | `cmd/golovebox/` | Entry point. `main.go` é o único lugar que conhece todos os tipos concretos. |
 | `internal/config/` | Parse de `config.toml`. Só usado dentro de `app`. |
 | `internal/embed/` | `//go:embed` de QEMU + Alpine qcow2 + static/. Extração para `.golovebox/`. |
-| `internal/gateway/` | Telegram bot, Slack, email. Delegador fino para `orchestrator.Engine`. |
 | `internal/llm/` | HTTP client OpenAI-compat. `NewCompleter(*Client) core.Completer` — adapter para injeção. |
 | `internal/setup/` | Wizard de inicialização (`golovebox init`). |
-| `internal/web/` | Servidor HTTP chi: SSE, WebSocket terminal, API runs, `RunStore`. |
+| `internal/web/` | Servidor HTTP chi: health (VM), WebSocket terminal SSH, SFTP file explorer. |
 
 ## Composition root (`main.go`)
 Responsável por:
 - Resolver `sandbox.Config` a partir de `config.Config`
-- Construir `orchestrator.Engine` via `buildEngine(sb, llmClient, cfg)`
-- Montar `core.RunConfig` via `buildRunConfig(cfg)`
-- Injetar `llm.NewCompleter(llmClient)` onde `core.Completer` é esperado
 - Injetar `*sandbox.VM` onde `core.Sandbox` é esperado
+- Bootar a VM e servir terminal SSH + SFTP via web
+
+## Comandos CLI
+| Comando | Função |
+|---|---|
+| `init` | Setup wizard (7 steps idempotentes) |
+| `web` | Inicia VM + servidor web |
+| `exec <cmd>` | Executa comando shell na VM via SSH |
+| `reset` | Remove VM disk/cidata para reinicialização limpa |
 
 ## Dependências permitidas
-- Todos os módulos do workspace (`core`, `promptlang`, `sandbox`, `toolskills`, `derivator`, `orchestrator`)
+- `core`, `sandbox`, `toolskills` (workspace)
 - Todas as libs externas listadas em `app/go.mod`
 
 ## Build
 ```bash
 cd app && CGO_ENABLED=0 mage build   # binário em build/
-go build ./...                        # verifica compilação
 ```
 
 ## Verificação local
@@ -44,4 +48,3 @@ cd app && GOWORK=off go vet ./...
 - CGO_ENABLED=0 (magefile.go aplica automaticamente)
 - Zero paths hardcoded — `baseDir = filepath.Join(filepath.Dir(execPath), ".golovebox")`
 - Zero escrita fora de `baseDir`
-- `main.go` é o único ponto de acoplamento de concretos — gateway/web nunca importam `*sandbox.VM` diretamente
