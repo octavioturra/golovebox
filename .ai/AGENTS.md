@@ -5,18 +5,21 @@ Você é um engenheiro Go sênior trabalhando no projeto **golovebox**.
 
 ## O que é
 
-Agente autônomo de código e comunicação. Portable app Windows-first.
+Box (QEMU) + luva (Canvas + mediação). Portable app Windows-first.
 Binário único, zero instalação — `golovebox.exe` em qualquer pasta, sem Python, Node, Docker ou admin.
 
-V0 entrega plataforma de execução completa (DAG + VM + UI + git workflow).
-V1 (em planejamento) promove golovebox a **TechLead** — especifica, delega para CLIs de código (Claude Code, Codex, Gemini), verifica e comunica. Ver `VISION.md` e `hypercontext.json`.
+O agente de trabalho é o **PicoClaw**, selado dentro da VM. A luva opera o PicoClaw via stdin/stdout, proxy do modelo (key nunca na box), resource manager e hook de mediação/audit.
+
+V0: box + luva funcionando (fases 33–39). Ver `.ai/roadmap.yaml`.
+V1 (planejamento futuro): receita de agente, multi-agente, secretary, memória .ai/.
 
 ## Onde olhar primeiro
 
-- **`.ai/FASES.json`** — digest único de todas as fases V0. Decisões arquiteturais vivas, libs em uso, padrões enduring, aprendizados. **Substitui a leitura dos `FASE_N.md` individuais.**
-- `.ai/fases/FASE_N.md` — histórico bruto, lê só sob demanda (link de uma decisão específica em `FASES.json`) ou quando há uma fase disponível aqui e não no `.ai/FASES.json`.
-- `.ai/VISION.md` — produto e direção V1.
-- `.ai/hypercontext.json` — metadados estruturados e roadmap V1.
+- **`.ai/roadmap.yaml`** — plano V0 completo: fases 31–39, status, caminho crítico.
+- **`.ai/FASES.json`** — digest das fases já entregues. Decisões arquiteturais vivas, libs em uso, padrões enduring.
+- `.ai/fases/FASE_N.md` — histórico bruto, lê só sob demanda.
+- `.ai/VISION.md` — narrativa de produto.
+- `.ai/hypercontext.json` — metadados estruturados.
 
 ## Regras de Código — Sem Exceções
 
@@ -36,18 +39,17 @@ V1 (em planejamento) promove golovebox a **TechLead** — especifica, delega par
 golovebox/
 ├── go.work              ← workspace-only, sem go.mod
 ├── core/                ← contratos, zero deps         → core/AGENTS.md
-├── promptlang/          ← DSL parser                   → promptlang/AGENTS.md
 ├── sandbox/             ← VM QEMU + core.Sandbox        → sandbox/AGENTS.md
 ├── toolskills/          ← skills registry + provisioner → toolskills/AGENTS.md
-├── derivator/           ← seed → PromptGraph            → derivator/AGENTS.md
-├── orchestrator/        ← Engine + dag/agent/tools/mem  → orchestrator/AGENTS.md
-└── app/                 ← composition root + UI + CLI   → app/AGENTS.md
+└── app/                 ← composition root + CLI + web  → app/AGENTS.md
     ├── magefile.go
     ├── cmd/golovebox/main.go
-    └── internal/{config,embed,gateway,llm,setup,web}/
+    └── internal/{config,embed,llm,setup,web}/
 ```
 
 **Regra de dependência**: setas só apontam para `core`. `app` importa todos. Ninguém importa `app`.
+
+> `promptlang/`, `derivator/`, `orchestrator/` foram deletados na FASE 33 — PicoClaw assume orquestração/DSL/derivação.
 **Contexto por módulo**: leia `<modulo>/AGENTS.md` + `core/contracts.go`. Não precisa do resto.
 **Mapa de contratos**: `core/CONTRACTS.md` — interface → implementador → consumidores.
 
@@ -127,7 +129,7 @@ Cada fato vive em **um único lugar**. Outros documentos linkam, nunca copiam.
 | Fato vivo (decisão, lib, aprendizado) | `FASES.json` |
 | Direção de produto e V1 | `hypercontext.json` |
 | Spec de módulo (contrato, API) | `<módulo>/AGENTS.md` |
-| DSL keywords e semântica | `promptlang/DSL.md` |
+| Roadmap de fases (V0) | `.ai/roadmap.yaml` |
 | Arquitetura de módulos | `README.md` |
 | Narrativa de produto | `VISION.md` |
 | Requisitos funcionais | `PRD.md` |

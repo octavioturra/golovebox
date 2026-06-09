@@ -1,0 +1,139 @@
+# ---------------------------------------------------------------------------
+# roadmap.yaml — V0 glovebox
+# ---------------------------------------------------------------------------
+# De agora até o V0 encarnar a visão: box (QEMU) + luva (Canvas + mediação),
+# PicoClaw selado dentro, operado pelas 5 capacidades.
+# Numeração: 31 (Git Determinístico) e 32 (Estabilização) já feitas.
+# O plano glovebox corre da 33 à 39.
+# ---------------------------------------------------------------------------
+
+meta:
+  agent: picoclaw                  # hardcoded no V0; receita generaliza no V1
+  thesis: box + luva, um .exe
+  ultima_feita: 32                 # Estabilização da box (concluída)
+  plano_glovebox: 33 → 39          # 7 fases de build
+  estrategia: estabilizar (feito) → amputar → crescer a luva (strangler reverso)
+
+v0_done: >
+  Dois cliques → box sobe → PicoClaw rodando selado dentro → Canvas opera ele:
+  jogar prompt, receber resposta, mexer recursos da VM, terminal/SFTP, painel
+  do Claw por proxy. Modelo só fala pela luva (key nunca na box). Tudo auditado.
+
+# ---------------------------------------------------------------------------
+# As 3 conexões da luva com a box (referência das fases)
+# ---------------------------------------------------------------------------
+glove_connections:
+  proxy_modelo: toda chamada LLM, key na luva      # FASE 35
+  canal_stdio:  prompt in / resposta out           # FASE 36 — capacidade 1+2
+  hook:         audit + approval (JSON-RPC stdio)   # FASE 39
+
+# ---------------------------------------------------------------------------
+# Fases
+# ---------------------------------------------------------------------------
+
+fases:
+
+  - id: 31
+    name: Git Determinístico
+    tipo: feito
+    nota: removeu git do domínio cognitivo (branch glb-*, commit/push automáticos)
+
+  - id: 32
+    name: Estabilização da box
+    tipo: feito
+    entrega: >
+      Fix do path stale do config.toml pós-FASE 27 (BaseDir via EvalSymlinks +
+      recomputar paths) e do firmware não-embarcado (filterAndCopyQEMU:
+      share/qemu/ → share/ flat do NSIS).
+    dod: dois cliques → boot silencioso → smoke SSH ok, em Windows limpo
+    status: concluída
+
+  - id: 33
+    name: Amputar o legado
+    tipo: cleanup
+    depends: [32]
+    entrega: >
+      Deletar promptlang, derivator, orchestrator (dag/agent/tools/memory).
+      Remover wiring de DSL/DAG/git-tools do app. core encolhe p/ contrato
+      glove↔box. app reduz a: boota box + web shell + terminal SSH + SFTP.
+    dod: >
+      app compila e boota a box; terminal/arquivos funcionam; CI boundary
+      verde; zero código de orquestração no repo
+    nota: terminal/SFTP (FASE 12) não dependem do orchestrator — gut limpo
+
+  - id: 34
+    name: PicoClaw na box
+    tipo: feature
+    depends: [33]
+    entrega: >
+      Embed/instalar binário picoclaw na imagem Alpine; sobe como serviço;
+      gateways Telegram/Discord DESLIGADOS. Instalação via manifesto
+      (formato-receita, mas picoclaw fixo no V0).
+    dod: picoclaw rodando dentro da VM, acessível por SSH (smoke com endpoint direto, temporário)
+
+  - id: 35
+    name: Proxy do modelo (a luva intercepta)
+    tipo: feature
+    depends: [34]
+    entrega: >
+      Repurpose internal/llm → proxy OpenAI-compat na luva (host). Streaming
+      passthrough. picoclaw endpoint → luva. Key fica na luva, nunca na box.
+      Audit de prompt/completion.
+    dod: picoclaw fala com o modelo SÓ pela luva; box→LLM = zero; key fora da box
+    sela: o furo de egress do canal principal (model channel)
+
+  - id: 36
+    name: Canal stdio (capacidades 1 e 2)
+    tipo: feature
+    depends: [35]
+    entrega: >
+      Luva ↔ picoclaw via canal stdio sobre SSH. Prompt → stdin;
+      resposta streamed ← stdout. Sem fork do picoclaw.
+    dod: jogar prompt pela luva → picoclaw responde → stream de volta
+
+  - id: 37
+    name: Canvas — as 5 zonas
+    tipo: feature
+    depends: [36]
+    entrega: >
+      Repurpose web UI → glovebox canvas. Zonas: prompt · respostas ·
+      terminal(SSH)/arquivos(SFTP) · painel do Claw por proxy do gateway
+      :18800 (capacidade 5, nunca porta raw).
+    dod: operar o picoclaw inteiro pelo Canvas (capacidades 1,2,4,5)
+
+  - id: 38
+    name: Resource manager + manifesto (capacidade 3)
+    tipo: feature
+    depends: [37]
+    entrega: >
+      Repurpose toolskills → add/remove recursos na box pela luva (apk,
+      serviços, arquivos). Mutação via manifesto declarativo (reproducible_box).
+      Base da futura receita de agente.
+    dod: add/remove recurso pela luva; reset reconstrói a box do manifesto
+
+  - id: 39
+    name: Hook de mediação (audit + approval)
+    tipo: feature
+    depends: [38]
+    entrega: >
+      Luva registra-se como hook process do picoclaw (JSON-RPC stdio):
+      before_tool / approve_tool / after_tool + audit_log builtin.
+    dod: toda tool-call do picoclaw auditada; approval flui pela luva
+    nota: approve_tool é a semente do human-in-the-loop / inbox (V1)
+
+# ---------------------------------------------------------------------------
+# Depois do V0 — começa o V1
+# ---------------------------------------------------------------------------
+
+apos_v0:
+  - receita_de_agente: generalizar manifesto p/ instalar qualquer claw (replaceable_intelligence literal)
+  - egress_git_apk_proxy: selar git/apk pela luva (modelo já selado no V0)
+  - multi_agente: canal "glovebox" custom no picoclaw → várias agent definitions
+  - secretary: gateways do picoclaw, mas mediados pela luva
+  - memoria_ai_folder: contexto persistente .ai/ MD-first
+
+# ---------------------------------------------------------------------------
+# Caminho crítico
+# ---------------------------------------------------------------------------
+critical_path: 33 → 34 → 35 → 36 → 37
+# o produto demonstra valor já no Canvas (37); 38 e 39 endurecem (recursos + mediação)
